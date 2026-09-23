@@ -1,0 +1,57 @@
+:root {
+  --ink: #0b1220;
+  --muted: #5b677a;
+  --brand: #0f766e;
+  --brand-2: #0e7490;
+  --line: #e6ebf2;
+  --bg: #f5f7fb;
+  --card: #fff;
+  --shadow: 0 10px 30px rgba(15, 23, 42, 0.07);
+  --radius: 1.1rem;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  color: var(--ink);
+  background:
+    radial-gradient(900px 420px at 10% -10%, #d9f3ee 0%, transparent 55%),
+    radial-gradient(700px 380px at 100% 0%, #e0f2fe 0%, transparent 50%),
+    var(--bg);
+}
+
+.skip {
+  position: absolute;
+  left: -999px;
+  top: 0.75rem;
+}
+.skip:focus {
+  left: 0.75rem;
+  z-index: 80;
+  border-radius: 0.75rem;
+  background: #fff;
+  padding: 0.5rem 0.9rem;
+  box-shadow: var(--shadow);
+}
+
+.sheet {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.faq-icon { display: inline-block; }
+.faq-btn[aria-expanded="true"] .faq-icon { transform: rotate(45deg); }
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff !important; }
+  main { padding: 0 !important; }
+  #payslip-sheet {
+    box-shadow: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    max-width: none !important;
+  }
+}

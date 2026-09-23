@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Payslip generates accurate payroll slips with live tax, deductions, and net pay.">
+  <title>Payslip — Clean payroll, instant payslips</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ["DM Sans", "ui-sans-serif", "system-ui"] },
+          colors: { brand: { DEFAULT: "#0f766e", dark: "#115e59", soft: "#ccfbf1" } },
+        },
+      },
+    };
+  </script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="font-sans text-slate-900 antialiased">
+  <a class="skip no-print font-medium text-brand" href="#main">Skip to content</a>
+
+  <header class="no-print sticky top-0 z-50 border-b border-slate-200/80 bg-white/80 backdrop-blur">
+    <div class="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3">
+      <a href="#top" class="flex items-center gap-2.5" aria-label="Payslip home">
+        <span class="grid h-9 w-9 place-items-center rounded-xl bg-brand text-sm font-bold text-white">P</span>
+        <span class="text-lg font-semibold tracking-tight">Payslip</span>
+      </a>
+      <nav class="hidden items-center gap-7 text-sm font-medium text-slate-600 md:flex" aria-label="Primary">
+        <a class="hover:text-brand" href="#features">Features</a>
+        <a class="hover:text-brand" href="#how">How it works</a>
+        <a class="hover:text-brand" href="#demo">Demo</a>
+        <a class="hover:text-brand" href="#pricing">Pricing</a>
+        <a class="hover:text-brand" href="#faq">FAQ</a>
+      </nav>
+      <div class="flex items-center gap-2">
+        <a href="#demo" class="hidden rounded-full bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-dark sm:inline-flex">Try demo</a>
+        <button id="nav-toggle" class="grid h-10 w-10 place-items-center rounded-xl border border-slate-200 md:hidden" type="button" aria-expanded="false" aria-controls="nav-panel" aria-label="Open menu">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 5h12M3 9h12M3 13h12"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="nav-panel" class="border-t border-slate-200 bg-white px-4 py-3 md:hidden" hidden>
+      <nav class="flex flex-col gap-3 text-sm font-medium" aria-label="Mobile">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#demo">Demo</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#faq">FAQ</a>
+        <a href="#demo" class="rounded-full bg-brand px-4 py-2 text-center text-white">Try demo</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section id="top" class="mx-auto grid max-w-6xl scroll-mt-24 items-center gap-12 px-4 pb-16 pt-12 md:grid-cols-2 md:pt-20">
+      <div>
+        <p class="mb-4 inline-flex rounded-full border border-teal-100 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-wider text-brand">Payroll, simplified</p>
+        <h1 class="text-4xl font-bold tracking-tight text-slate-900 md:text-5xl">Clean payslips. Accurate net pay. In seconds.</h1>
+        <p class="mt-4 max-w-lg text-lg text-slate-600">Payslip is a lightweight payroll product for teams that need professional slips without spreadsheets or heavy HR suites.</p>
+        <div class="mt-8 flex flex-wrap gap-3">
+          <a href="#demo" class="rounded-full bg-brand px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-brand-dark">Generate a payslip</a>
+          <a href="#pricing" class="rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 hover:border-slate-300">View pricing</a>
+        </div>
+      </div>
+      <aside class="sheet p-5" aria-hidden="true">
+        <div class="mb-4 flex items-center justify-between">
+          <div>
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">September 2026</p>
+            <p class="font-semibold">Preview slip</p>
+          </div>
+          <span class="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-semibold text-brand-dark">Net ready</span>
+        </div>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between"><span class="text-slate-500">Gross pay</span><span class="font-medium">$5,770.00</span></div>
+          <div class="flex justify-between"><span class="text-slate-500">Tax</span><span class="font-medium">$692.40</span></div>
+          <div class="flex justify-between"><span class="text-slate-500">Deductions</span><span class="font-medium">$210.00</span></div>
+        </div>
+        <div class="mt-4 rounded-2xl bg-slate-900 px-4 py-3 text-white">
+          <p class="text-xs text-slate-300">Take-home</p>
+          <p class="text-2xl font-semibold">$4,867.60</p>
+        </div>
+      </aside>
+    </section>
+
+    <section class="no-print border-y border-slate-200 bg-white/70" aria-label="Product stats">
+      <div class="mx-auto grid max-w-6xl grid-cols-2 gap-6 px-4 py-10 md:grid-cols-4">
+        <div><p class="text-3xl font-bold">12k+</p><p class="text-sm text-slate-500">Payslips generated</p></div>
+        <div><p class="text-3xl font-bold">98.4%</p><p class="text-sm text-slate-500">Calculation accuracy</p></div>
+        <div><p class="text-3xl font-bold">40+</p><p class="text-sm text-slate-500">Teams onboarded</p></div>
+        <div><p class="text-3xl font-bold">2 min</p><p class="text-sm text-slate-500">Average run time</p></div>
+      </div>
+    </section>
+
+    <section id="features" class="no-print mx-auto max-w-6xl scroll-mt-24 px-4 py-20">
+      <p class="text-sm font-semibold uppercase tracking-wider text-brand">Features</p>
+      <h2 class="mt-2 text-3xl font-bold tracking-tight">Everything needed for a clean payroll run</h2>
+      <div class="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        <article class="sheet p-5"><h3 class="font-semibold">Live calculations</h3><p class="mt-2 text-sm text-slate-600">Gross, tax, deductions, and net pay update as you type.</p></article>
+        <article class="sheet p-5"><h3 class="font-semibold">Tax-ready slips</h3><p class="mt-2 text-sm text-slate-600">Apply a tax rate and see withholdings before you print.</p></article>
+        <article class="sheet p-5"><h3 class="font-semibold">Print in one click</h3><p class="mt-2 text-sm text-slate-600">Send a polished slip to the printer with no extra tooling.</p></article>
+        <article class="sheet p-5"><h3 class="font-semibold">Draft autosave</h3><p class="mt-2 text-sm text-slate-600">Keep work on this device with localStorage — no account required.</p></article>
+        <article class="sheet p-5"><h3 class="font-semibold">Clear templates</h3><p class="mt-2 text-sm text-slate-600">A professional layout employees can actually understand.</p></article>
+        <article class="sheet p-5"><h3 class="font-semibold">Multi-currency</h3><p class="mt-2 text-sm text-slate-600">Preview USD, GBP, EUR, PKR, or GHS without leaving the page.</p></article>
+      </div>
+    </section>
+
+    <section id="how" class="no-print mx-auto max-w-6xl scroll-mt-24 px-4 pb-8">
+      <p class="text-sm font-semibold uppercase tracking-wider text-brand">How it works</p>
+      <h2 class="mt-2 text-3xl font-bold tracking-tight">Three steps from numbers to a slip</h2>
+      <ol class="mt-10 grid gap-5 md:grid-cols-3">
+        <li class="sheet p-6"><span class="grid h-9 w-9 place-items-center rounded-full bg-brand text-sm font-bold text-white">1</span><h3 class="mt-4 font-semibold">Enter pay details</h3><p class="mt-2 text-sm text-slate-600">Add salary, allowances, tax rate, and deductions.</p></li>
+        <li class="sheet p-6"><span class="grid h-9 w-9 place-items-center rounded-full bg-brand text-sm font-bold text-white">2</span><h3 class="mt-4 font-semibold">Review live totals</h3><p class="mt-2 text-sm text-slate-600">The preview updates instantly so you catch mistakes early.</p></li>
+        <li class="sheet p-6"><span class="grid h-9 w-9 place-items-center rounded-full bg-brand text-sm font-bold text-white">3</span><h3 class="mt-4 font-semibold">Print or save</h3><p class="mt-2 text-sm text-slate-600">Print the slip or store a draft on this browser.</p></li>
+      </ol>
+    </section>
+
+    <section id="demo" class="mx-auto max-w-6xl scroll-mt-24 px-4 py-20">
+      <div class="no-print mb-8">
+        <p class="text-sm font-semibold uppercase tracking-wider text-brand">Interactive demo</p>
+        <h2 class="mt-2 text-3xl font-bold tracking-tight">Payslip generator</h2>
+        <p class="mt-2 text-slate-600">Edit the form and watch gross pay, tax, deductions, and net pay recalculate.</p>
+      </div>
+      <div class="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]">
+        <form id="demo-form" class="no-print sheet grid gap-4 p-5 sm:grid-cols-2">
+          <label class="grid gap-1 text-sm font-medium sm:col-span-2">Full name
+            <input id="name" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2" autocomplete="name" required>
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Role
+            <input id="role" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Employee ID
+            <input id="empId" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Pay period
+            <input id="period" type="month" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Currency
+            <select id="currency" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+              <option value="USD">USD</option>
+              <option value="GBP">GBP</option>
+              <option value="EUR">EUR</option>
+              <option value="PKR">PKR</option>
+              <option value="GHS">GHS</option>
+            </select>
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Basic salary
+            <input id="basic" type="number" min="0" step="0.01" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Allowances
+            <input id="allowance" type="number" min="0" step="0.01" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Bonus / other earnings
+            <input id="bonus" type="number" min="0" step="0.01" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Tax rate (%)
+            <input id="taxRate" type="number" min="0" max="100" step="0.1" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <label class="grid gap-1 text-sm font-medium sm:col-span-2">Other deductions
+            <input id="other" type="number" min="0" step="0.01" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <div class="flex flex-wrap gap-2 sm:col-span-2">
+            <button id="save" type="button" class="rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark">Save draft</button>
+            <button id="print" type="button" class="rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold">Print</button>
+            <button id="reset" type="button" class="rounded-full px-4 py-2.5 text-sm font-semibold text-slate-600">Reset</button>
+          </div>
+        </form>
+
+        <article id="payslip-sheet" class="sheet overflow-hidden" aria-live="polite">
+          <div class="flex items-start justify-between bg-slate-900 px-5 py-4 text-white">
+            <div>
+              <p class="text-xs uppercase tracking-wider text-slate-300">Payslip</p>
+              <h3 id="p-name" class="text-lg font-semibold"></h3>
+              <p id="p-role" class="text-sm text-slate-300"></p>
+            </div>
+            <div class="text-right text-sm">
+              <p id="p-period" class="font-medium"></p>
+              <p class="text-slate-300">ID <span id="p-id"></span></p>
+            </div>
+          </div>
+          <div class="p-5">
+            <table class="w-full text-sm">
+              <caption class="sr-only">Earnings and deductions</caption>
+              <thead>
+                <tr class="text-left text-slate-500">
+                  <th class="pb-2 font-medium">Item</th>
+                  <th class="pb-2 text-right font-medium">Amount</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr><td class="py-2">Basic salary</td><td id="p-basic" class="py-2 text-right"></td></tr>
+                <tr><td class="py-2">Allowances</td><td id="p-allowance" class="py-2 text-right"></td></tr>
+                <tr><td class="py-2">Bonus / other</td><td id="p-bonus" class="py-2 text-right"></td></tr>
+                <tr class="font-semibold"><td class="py-2">Gross pay</td><td id="p-gross" class="py-2 text-right"></td></tr>
+                <tr><td class="py-2">Tax <span id="p-taxrate" class="text-slate-400"></span></td><td id="p-tax" class="py-2 text-right"></td></tr>
+                <tr><td class="py-2">Other deductions</td><td id="p-other" class="py-2 text-right"></td></tr>
+                <tr><td class="py-2">Total deductions</td><td id="p-deductions" class="py-2 text-right"></td></tr>
+              </tbody>
+            </table>
+            <div class="mt-5 flex items-center justify-between rounded-2xl bg-brand-soft px-4 py-3">
+              <span class="text-sm font-semibold text-brand-dark">Net pay</span>
+              <span id="p-net" class="text-xl font-bold text-slate-900"></span>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="pricing" class="no-print mx-auto max-w-6xl scroll-mt-24 px-4 py-8">
+      <p class="text-sm font-semibold uppercase tracking-wider text-brand">Pricing</p>
+      <h2 class="mt-2 text-3xl font-bold tracking-tight">Simple plans for growing teams</h2>
+      <div class="mt-10 grid gap-5 md:grid-cols-3">
+        <article class="sheet p-6">
+          <h3 class="font-semibold">Starter</h3>
+          <p class="mt-3 text-3xl font-bold">$0<span class="text-base font-medium text-slate-500">/mo</span></p>
+          <ul class="mt-4 space-y-2 text-sm text-slate-600">
+            <li>5 payslips / month</li>
+            <li>Live calculator</li>
+            <li>Print &amp; local drafts</li>
+          </ul>
+          <a href="#demo" class="mt-6 inline-flex rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold">Start free</a>
+        </article>
+        <article class="sheet p-6 ring-2 ring-brand">
+          <p class="text-xs font-semibold uppercase tracking-wide text-brand">Most popular</p>
+          <h3 class="mt-1 font-semibold">Growth</h3>
+          <p class="mt-3 text-3xl font-bold">$19<span class="text-base font-medium text-slate-500">/mo</span></p>
+          <ul class="mt-4 space-y-2 text-sm text-slate-600">
+            <li>Unlimited slips</li>
+            <li>Multi-currency</li>
+            <li>Saved templates</li>
+          </ul>
+          <a href="#demo" class="mt-6 inline-flex rounded-full bg-brand px-4 py-2 text-sm font-semibold text-white">Choose Growth</a>
+        </article>
+        <article class="sheet p-6">
+          <h3 class="font-semibold">Business</h3>
+          <p class="mt-3 text-3xl font-bold">$49<span class="text-base font-medium text-slate-500">/mo</span></p>
+          <ul class="mt-4 space-y-2 text-sm text-slate-600">
+            <li>Team workspaces</li>
+            <li>Audit-ready exports</li>
+            <li>Priority support</li>
+          </ul>
+          <a href="#cta" class="mt-6 inline-flex rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold">Talk to us</a>
+        </article>
+      </div>
+    </section>
+
+    <section class="no-print mx-auto max-w-6xl px-4 py-20" aria-labelledby="stories">
+      <p class="text-sm font-semibold uppercase tracking-wider text-brand">Testimonials</p>
+      <h2 id="stories" class="mt-2 text-3xl font-bold tracking-tight">Trusted by operators who hate messy payroll</h2>
+      <div class="mt-10 grid gap-5 md:grid-cols-3">
+        <figure class="sheet p-6">
+          <blockquote class="text-sm text-slate-700">“We replaced a spreadsheet stack in an afternoon. The live net-pay preview is the feature finance actually uses.”</blockquote>
+          <figcaption class="mt-4 text-sm font-semibold">Lena Okoye <span class="font-normal text-slate-500">· People Ops, Northwind</span></figcaption>
+        </figure>
+        <figure class="sheet p-6">
+          <blockquote class="text-sm text-slate-700">“Printing a clean slip for contractors used to take twenty minutes. Now it is a form and a click.”</blockquote>
+          <figcaption class="mt-4 text-sm font-semibold">Daniel Mensah <span class="font-normal text-slate-500">· Founder, Accra Labs</span></figcaption>
+        </figure>
+        <figure class="sheet p-6">
+          <blockquote class="text-sm text-slate-700">“Drafts stay on the laptop, which our auditors liked more than mystery cloud folders.”</blockquote>
+          <figcaption class="mt-4 text-sm font-semibold">Hira Shah <span class="font-normal text-slate-500">· Controller, Karachi Co</span></figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section id="faq" class="no-print mx-auto max-w-3xl scroll-mt-24 px-4 pb-16">
+      <p class="text-sm font-semibold uppercase tracking-wider text-brand">FAQ</p>
+      <h2 class="mt-2 text-3xl font-bold tracking-tight">Questions, answered</h2>
+      <div class="mt-8 divide-y divide-slate-200 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <div>
+          <button class="faq-btn flex w-full items-center justify-between px-5 py-4 text-left font-medium" type="button" data-faq aria-expanded="false" aria-controls="faq-1">
+            How are tax and net pay calculated?
+            <span class="faq-icon text-xl leading-none text-slate-400 transition" aria-hidden="true">+</span>
+          </button>
+          <p id="faq-1" class="px-5 pb-4 text-sm text-slate-600" hidden>Gross pay is basic salary plus allowances and bonus. Tax is gross × tax rate. Deductions are other withholdings. Net pay is gross minus tax minus deductions.</p>
+        </div>
+        <div>
+          <button class="faq-btn flex w-full items-center justify-between px-5 py-4 text-left font-medium" type="button" data-faq aria-expanded="false" aria-controls="faq-2">
+            Does Save draft need an account?
+            <span class="faq-icon text-xl leading-none text-slate-400 transition" aria-hidden="true">+</span>
+          </button>
+          <p id="faq-2" class="px-5 pb-4 text-sm text-slate-600" hidden>No. Drafts are stored in this browser with localStorage and restored the next time you open the page.</p>
+        </div>
+        <div>
+          <button class="faq-btn flex w-full items-center justify-between px-5 py-4 text-left font-medium" type="button" data-faq aria-expanded="false" aria-controls="faq-3">
+            Can I print the payslip?
+            <span class="faq-icon text-xl leading-none text-slate-400 transition" aria-hidden="true">+</span>
+          </button>
+          <p id="faq-3" class="px-5 pb-4 text-sm text-slate-600" hidden>Yes. Print uses the browser print dialog and hides the rest of the page so only the slip is on the page.</p>
+        </div>
+        <div>
+          <button class="faq-btn flex w-full items-center justify-between px-5 py-4 text-left font-medium" type="button" data-faq aria-expanded="false" aria-controls="faq-4">
+            Is this a full payroll system?
+            <span class="faq-icon text-xl leading-none text-slate-400 transition" aria-hidden="true">+</span>
+          </button>
+          <p id="faq-4" class="px-5 pb-4 text-sm text-slate-600" hidden>This page is a product demo. Growth and Business plans add templates, workspaces, and exports for live payroll teams.</p>
+        </div>
+        <div>
+          <button class="faq-btn flex w-full items-center justify-between px-5 py-4 text-left font-medium" type="button" data-faq aria-expanded="false" aria-controls="faq-5">
+            Which currencies are supported?
+            <span class="faq-icon text-xl leading-none text-slate-400 transition" aria-hidden="true">+</span>
+          </button>
+          <p id="faq-5" class="px-5 pb-4 text-sm text-slate-600" hidden>The generator formats USD, GBP, EUR, PKR, and GHS. Totals stay the same; only the display currency changes.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="cta" class="no-print mx-auto max-w-6xl px-4 pb-20">
+      <div class="rounded-3xl bg-slate-900 px-6 py-12 text-center text-white shadow-lg md:px-16">
+        <h2 class="text-3xl font-bold tracking-tight">Run payroll without the spreadsheet mess</h2>
+        <p class="mx-auto mt-3 max-w-xl text-slate-300">Generate a live payslip now, print it, and save a draft on this device.</p>
+        <a href="#demo" class="mt-6 inline-flex rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-100">Open the generator</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="no-print border-t border-slate-200 bg-white">
+    <div class="mx-auto grid max-w-6xl gap-8 px-4 py-12 sm:grid-cols-2 md:grid-cols-4">
+      <div>
+        <p class="flex items-center gap-2 font-semibold"><span class="grid h-8 w-8 place-items-center rounded-lg bg-brand text-xs text-white">P</span>Payslip</p>
+        <p class="mt-3 text-sm text-slate-500">Modern payslips for teams that want clarity, not clutter.</p>
+      </div>
+      <div>
+        <p class="text-sm font-semibold">Product</p>
+        <ul class="mt-3 space-y-2 text-sm text-slate-600">
+          <li><a href="#features">Features</a></li>
+          <li><a href="#demo">Generator</a></li>
+          <li><a href="#pricing">Pricing</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="text-sm font-semibold">Company</p>
+        <ul class="mt-3 space-y-2 text-sm text-slate-600">
+          <li><a href="#stories">Customers</a></li>
+          <li><a href="#faq">FAQ</a></li>
+          <li><a href="#cta">Contact</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="text-sm font-semibold">Legal</p>
+        <ul class="mt-3 space-y-2 text-sm text-slate-600">
+          <li>Privacy</li>
+          <li>Terms</li>
+        </ul>
+      </div>
+    </div>
+    <p class="border-t border-slate-100 px-4 py-4 text-center text-xs text-slate-500">© 2026 Payslip. All rights reserved.</p>
+  </footer>
+
+  <p id="toast" class="no-print fixed bottom-4 right-4 rounded-full bg-slate-900 px-4 py-2 text-sm text-white shadow-lg" role="status" hidden></p>
+  <script src="/app.js" defer></script>
+</body>
+</html>

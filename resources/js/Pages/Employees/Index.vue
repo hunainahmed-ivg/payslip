@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { Head, Link, useForm } from '@inertiajs/vue3';
+import { Head, Link, useForm, router } from '@inertiajs/vue3';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import PrimaryButton from '@/Components/PrimaryButton.vue';
 import SecondaryButton from '@/Components/SecondaryButton.vue';
@@ -10,6 +10,7 @@ import TextInput from '@/Components/TextInput.vue';
 import InputError from '@/Components/InputError.vue';
 import Checkbox from '@/Components/Checkbox.vue';
 import Modal from '@/Components/Modal.vue';
+import EmployeeBulkImportModal from '@/Components/EmployeeBulkImportModal.vue';
 
 interface Branch {
     id: number;
@@ -153,6 +154,9 @@ const confirmDelete = () => {
         },
     });
 };
+
+const showBulkImport = ref(false);
+
 </script>
 
 <template>
@@ -165,7 +169,19 @@ const confirmDelete = () => {
                     <h1>Employees</h1>
                     <p>Contract values, branch assignment & currency mapping per employee.</p>
                 </div>
-                <PrimaryButton @click="openCreate">+ Add Employee</PrimaryButton>
+                <div class="flex items-center gap-3">
+                    <button
+                        type="button"
+                        class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+                        @click="showBulkImport = true"
+                    >
+                        Bulk Import Employees
+                    </button>
+
+                    <PrimaryButton @click="openCreate">
+                        + Add Employee
+                    </PrimaryButton>
+                </div>
             </div>
         </template>
 
@@ -323,6 +339,8 @@ const confirmDelete = () => {
                             <PrimaryButton :disabled="form.processing">
                                 {{ editing ? 'Update' : 'Create' }}
                             </PrimaryButton>
+
+                            
                         </div>
                     </form>
                 </div>
@@ -344,6 +362,11 @@ const confirmDelete = () => {
                 </div>
             </Modal>
         </div>
+        <EmployeeBulkImportModal
+            :show="showBulkImport"
+            @close="showBulkImport = false"
+            @imported="router.reload()"
+        />
     </AuthenticatedLayout>
 </template>
 

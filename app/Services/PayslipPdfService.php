@@ -32,7 +32,9 @@ class PayslipPdfService
 
         $path = 'payslips/'.$payslip->period.'/'.$payslip->employee->employee_code.'.pdf';
 
-        Storage::disk('public')->put($path, $pdf->output());
+        Storage::disk('private')->makeDirectory(dirname($path), 0755, true, true);
+
+        Storage::disk('private')->put($path, $pdf->output());
 
         $payslip->update([
             'pdf_path' => $path,
@@ -72,10 +74,12 @@ class PayslipPdfService
             ])->render();
     
             $pdf = Pdf::loadHTML($html)->setPaper('a4', 'portrait');
-    
+                
             $path = 'payslips/stamped/'.$payslip->period.'/'.$payslip->employee->employee_code.'-stamped-'.$stampedRequest->id.'.pdf';
-    
-            Storage::disk('public')->put($path, $pdf->output());
+
+            Storage::disk('private')->makeDirectory(dirname($path), 0755, true, true);
+
+            Storage::disk('private')->put($path, $pdf->output());
     
             $stampedRequest->update(['stamped_pdf_path' => $path]);
         }

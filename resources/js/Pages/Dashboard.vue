@@ -1,6 +1,16 @@
 <script setup lang="ts">
-import { Head } from '@inertiajs/vue3';
+import { Head, Link } from '@inertiajs/vue3';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
+
+defineProps<{
+    isAdmin?: boolean;
+    stats?: {
+        open_drafts: number;
+        pending_stamps: number;
+        approved_ready: number;
+        latest_period: string | null;
+    } | null;
+}>();
 </script>
 
 <template>
@@ -9,58 +19,74 @@ import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
     <AuthenticatedLayout>
         <template #header>
             <h1>Dashboard</h1>
-            <p>Welcome to your PayrollOS Enterprise Suite dashboard.</p>
+            <p>Overview of payroll activity and pending actions.</p>
         </template>
 
         <div class="grid">
-            <div class="card">
-                <div class="card-head">
-                    <div>
-                        <h2>Welcome Back!</h2>
-                        <div class="sub">You're logged in to the system.</div>
+            <template v-if="isAdmin && stats">
+                <div class="stats">
+                    <div class="card">
+                        <div class="label">Open Draft Runs</div>
+                        <div class="value">{{ stats.open_drafts }}</div>
                     </div>
-                    <span class="badge success">Active</span>
+                    <div class="card">
+                        <div class="label">Approved, Ready to Publish</div>
+                        <div class="value">{{ stats.approved_ready }}</div>
+                    </div>
+                    <div class="card">
+                        <div class="label">Pending Stamped Requests</div>
+                        <div class="value">{{ stats.pending_stamps }}</div>
+                    </div>
+                    <div class="card">
+                        <div class="label">Latest Period</div>
+                        <div class="value text-lg">{{ stats.latest_period ?? '—' }}</div>
+                    </div>
                 </div>
-                <p class="text-gray-600">
-                    Use the sidebar navigation to manage employees, run payroll, and configure system settings.
-                </p>
+                <div class="card">
+                    <h2>Quick Actions</h2>
+                    <div class="actions">
+                        <Link :href="route('payroll-runs.index')" class="action">Generate Draft Payroll</Link>
+                        <Link :href="route('payroll.import')" class="action">Import Monthly Data</Link>
+                        <Link :href="route('stamped-requests.index')" class="action">Review Stamped Requests</Link>
+                    </div>
+                </div>
+            </template>
+            <div v-else class="card">
+                <h2>Employee Portal</h2>
+                <p class="sub">View and download your published payslips, or request an official stamped copy.</p>
+                <Link :href="route('portal.payslips')" class="action">Go to My Payslips</Link>
             </div>
         </div>
     </AuthenticatedLayout>
 </template>
 
 <style scoped>
-.grid {
+.grid { display: grid; gap: 22px; }
+.stats {
     display: grid;
-    grid-template-columns: 1fr;
-    gap: 22px;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
 }
-
 .card {
     background: #fff;
     border: 1px solid #e5e9f2;
     border-radius: 14px;
     padding: 20px;
-    box-shadow: 0 1px 0 rgba(15,23,42,.02);
 }
-
-.card-head {
-    display: flex; align-items: flex-start; justify-content: space-between;
-    margin-bottom: 14px;
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #64748b; }
+.value { margin-top: 8px; font-size: 28px; font-weight: 650; color: #0f172a; }
+.value.text-lg { font-size: 20px; }
+h2 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+.sub { color: #64748b; font-size: 13px; margin: 0 0 14px; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.action {
+    display: inline-flex;
+    padding: 9px 14px;
+    border-radius: 8px;
+    background: #1d4ed8;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 500;
 }
-
-.card-head h2 {
-    margin: 0; font-size: 15px; font-weight: 600; color: #0f172a;
-}
-
-.card-head .sub { color: #64748b; font-size: 12.5px; margin-top: 2px; }
-
-.badge {
-    font-size: 11px; font-weight: 500;
-    padding: 3px 8px; border-radius: 999px;
-    background: #eef2ff; color: #4338ca;
-    border: 1px solid #e0e7ff;
-}
-
-.badge.success { background: #ecfdf5; color: #047857; border-color: #d1fae5; }
+.action:hover { background: #1e40af; }
 </style>

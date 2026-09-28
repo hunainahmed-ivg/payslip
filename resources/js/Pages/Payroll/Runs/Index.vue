@@ -64,9 +64,9 @@ const fmt = (v: string) =>
             <div class="flex flex-wrap items-center justify-between gap-4">
                 <div>
                     <h1>Payroll Runs</h1>
-                    <p>Monthly batch execution — draft, review, override, approve & freeze.</p>
+                    <p>Generate draft payroll, review line items, approve, then publish payslips.</p>
                 </div>
-                <PrimaryButton @click="openCreate">▶ Run Monthly Payroll Draft</PrimaryButton>
+                <PrimaryButton @click="openCreate">Generate Draft Payroll</PrimaryButton>
             </div>
         </template>
 
@@ -114,7 +114,7 @@ const fmt = (v: string) =>
                         </tr>
                         <tr v-if="!runs.length">
                             <td colspan="6" class="px-6 py-10 text-center text-sm text-gray-500">
-                                No payroll runs yet — click "Run Monthly Payroll Draft" to start.
+                                No payroll runs yet — click "Generate Draft Payroll" to start.
                             </td>
                         </tr>
                     </tbody>
@@ -124,9 +124,9 @@ const fmt = (v: string) =>
             <!-- Create Draft Modal -->
             <Modal :show="showCreate" @close="showCreate = false">
                 <div class="p-6">
-                    <h2 class="text-lg font-medium text-gray-900">Run Monthly Payroll Draft</h2>
+                    <h2 class="text-lg font-medium text-gray-900">Generate Draft Payroll</h2>
                     <p class="mt-2 text-sm text-gray-600">
-                        The engine will compute earnings, deductions and net pay for every active employee using master rules, contract overrides and ingested attendance data.
+                        The engine will compute earnings, deductions and net pay for every active employee using master rules, contract overrides and monthly attendance data.
                     </p>
                     <form class="mt-6 space-y-4" @submit.prevent="submit">
                         <div>

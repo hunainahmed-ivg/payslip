@@ -1,37 +1,67 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import { Link, usePage } from '@inertiajs/vue3';
+import { computed } from 'vue';
+import { Link, router, usePage } from '@inertiajs/vue3';
 
-const user = usePage().props.auth.user;
-const showingNavigationDropdown = ref(false);
-const navigationLinks = [
-    { name: 'Dashboard', href: route('dashboard'), routeName: 'dashboard', icon: '📊' },
-    { name: 'My Pay Slips', href: route('portal.payslips'), routeName: 'portal.payslips', icon: '📄' },
-    { name: 'Employees', href: route('employees.index'), routeName: 'employees.*', icon: '👥' },
-    { name: 'Payroll', href: route('payroll.import'), routeName: 'payroll.*', icon: '📥' },
-    { name: 'Payroll Runs', href: route('payroll-runs.index'), routeName: 'payroll-runs.*', icon: '🗓️' },
-    { name: 'Reports', href: route('reports.index'), routeName: 'reports.*', icon: '📈' },
-];
+const page = usePage();
+const user = computed(() => page.props.auth.user);
+const isAdmin = computed(() => !!user.value?.is_admin);
+const companyName = computed(() => (page.props.companyName as string) || 'Payslip Engine');
+
+const navigationLinks = computed(() => {
+    const links = [
+        { name: 'Dashboard', href: route('dashboard'), routeName: 'dashboard', adminOnly: false },
+        { name: 'My Payslips', href: route('portal.payslips'), routeName: 'portal.payslips', adminOnly: false },
+    ];
+
+    if (isAdmin.value) {
+        links.push(
+            { name: 'Employees', href: route('employees.index'), routeName: 'employees.*', adminOnly: true },
+            { name: 'Payroll Import', href: route('payroll.import'), routeName: 'payroll.*', adminOnly: true },
+            { name: 'Payroll Runs', href: route('payroll-runs.index'), routeName: 'payroll-runs.*', adminOnly: true },
+            { name: 'Reports', href: route('reports.index'), routeName: 'reports.*', adminOnly: true },
+        );
+    }
+
+    return links;
+});
 
 const configurationLinks = [
-    { name: 'Company Profile', href: route('settings.company-profile'), routeName: 'settings.company-profile', icon: '🏢' },
-    { name: 'Visual Identity', href: route('settings.visual-identity'), routeName: 'settings.visual-identity', icon: '🎨' },
-    { name: 'Salary Components', href: route('settings.salary-components.index'), routeName: 'settings.salary-components.*', icon: '🧮' },
-    { name: 'Payslip Templates', href: route('settings.payslip-templates'), routeName: 'settings.payslip-templates', icon: '📄' },
-    { name: 'Integrations', href: route('settings.integrations'), routeName: 'settings.integrations', icon: '🔌' },
-    { name: 'Security & Audit', href: route('settings.security-audit'), routeName: 'settings.security-audit', icon: '🔒' },
+    { name: 'Companies', href: route('companies.index'), routeName: 'companies.*' },
+    { name: 'Company Profile', href: route('settings.company-profile'), routeName: 'settings.company-profile' },
+    { name: 'Visual Identity', href: route('settings.visual-identity'), routeName: 'settings.visual-identity' },
+    { name: 'Salary Components', href: route('settings.salary-components.index'), routeName: 'settings.salary-components.*' },
+    { name: 'Payslip Templates', href: route('settings.payslip-templates'), routeName: 'settings.payslip-templates' },
+    { name: 'Integrations', href: route('settings.integrations'), routeName: 'settings.integrations' },
+    { name: 'API Guidelines', href: route('settings.api-guidelines'), routeName: 'settings.api-guidelines' },
+    { name: 'Security & Audit', href: route('settings.security-audit'), routeName: 'settings.security-audit' },
 ];
+
+const companies = computed(() => (page.props.companies as Array<{ id: number; company_name: string }>) || []);
+const currentCompany = computed(() => page.props.currentCompany as { id: number; company_name: string } | null);
+
+const switchCompany = (event: Event) => {
+    const id = Number((event.target as HTMLSelectElement).value);
+    if (!id || id === currentCompany.value?.id) return;
+    router.post(route('companies.switch', id), {}, { preserveScroll: true });
+};
 </script>
 
 <template>
     <div class="app">
-        <!-- Sidebar -->
         <aside class="sidebar">
             <div class="brand">
-                <div class="brand-mark">P</div>
-                <div>
-                    <div class="brand-name">PayrollOS</div>
-                    <div class="brand-sub">Enterprise Suite</div>
+                <div class="brand-mark">{{ companyName.charAt(0) }}</div>
+                <div class="brand-text">
+                    <div class="brand-name">{{ companyName }}</div>
+                    <div class="brand-sub">Payslip Engine</div>
+                    <select
+                        v-if="isAdmin && companies.length > 1"
+                        class="company-switcher"
+                        :value="currentCompany?.id"
+                        @change="switchCompany"
+                    >
+                        <option v-for="c in companies" :key="c.id" :value="c.id">{{ c.company_name }}</option>
+                    </select>
                 </div>
             </div>
 
@@ -49,6 +79,7 @@ const configurationLinks = [
                         {{ link.name }}
                     </Link>
                     <Link
+                        v-if="isAdmin"
                         :href="route('stamped-requests.index')"
                         class="nav-link"
                         :class="{ active: route().current('stamped-requests.*') }"
@@ -62,7 +93,7 @@ const configurationLinks = [
                 </nav>
             </div>
 
-            <div>
+            <div v-if="isAdmin">
                 <div class="nav-group-label">Configuration</div>
                 <nav class="nav">
                     <Link
@@ -79,11 +110,11 @@ const configurationLinks = [
             </div>
 
             <div class="sidebar-footer">
-                <div class="avatar">{{ $page.props.auth.user.name.charAt(0) }}</div>
+                <div class="avatar">{{ user?.name?.charAt(0) }}</div>
                 <div class="user-card">
                     <div class="user-info">
-                        <div class="user-name">{{ $page.props.auth.user.name }}</div>
-                        <div class="user-role">{{ $page.props.auth.user.email }}</div>
+                        <div class="user-name">{{ user?.name }}</div>
+                        <div class="user-role">{{ isAdmin ? 'Administrator' : 'Employee' }}</div>
                     </div>
                     <Link
                         :href="route('logout')"
@@ -92,37 +123,25 @@ const configurationLinks = [
                         class="logout-btn"
                         title="Log Out"
                     >
-                        <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke-width="1.8"
-                            stroke="currentColor"
-                            class="logout-icon"
-                        >
-                            <path
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9"
-                            />
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" class="logout-icon">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
                         </svg>
                     </Link>
                 </div>
             </div>
         </aside>
 
-        <!-- Main Content -->
         <main class="main">
             <div class="topbar">
                 <div class="crumbs">
-                    <span>PayrollOS &nbsp;/&nbsp; {{ $page.props.auth.user.name }}</span>
+                    <span>{{ companyName }} / {{ user?.name }}</span>
                 </div>
                 <div class="topbar-actions">
-                    <Link :href="route('settings.security-audit')" class="btn btn-ghost">View audit log</Link>
+                    <Link v-if="isAdmin" :href="route('settings.security-audit')" class="btn btn-ghost">View audit log</Link>
+                    <Link :href="route('profile.edit')" class="btn btn-ghost">Profile</Link>
                 </div>
             </div>
 
-            <!-- Page Heading -->
             <header class="page-header" v-if="$slots.header">
                 <div class="page-title">
                     <div>
@@ -131,7 +150,6 @@ const configurationLinks = [
                 </div>
             </header>
 
-            <!-- Page Content -->
             <main class="page-content">
                 <slot />
             </main>
@@ -140,11 +158,10 @@ const configurationLinks = [
 </template>
 
 <style>
-/* Base */
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-    font-family: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
     background: #f4f6fb;
     color: #0f172a;
     font-size: 14px;
@@ -154,7 +171,6 @@ body {
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; cursor: pointer; border: none; background: none; }
 
-/* Layout */
 .pending-pill {
     margin-left: auto;
     background: #f59e0b;
@@ -170,7 +186,6 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     min-height: 100vh;
 }
 
-/* Sidebar */
 .sidebar {
     background: #0b1220;
     color: #cbd5e1;
@@ -189,19 +204,13 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     height: 32px;
     border-radius: 8px;
     color: #94a3b8;
-    background: transparent;
-    border: none;
-    cursor: pointer;
     transition: all 0.15s;
 }
 .logout-btn:hover {
     background: rgba(239, 68, 68, 0.15);
     color: #f87171;
 }
-.logout-icon {
-    width: 18px;
-    height: 18px;
-}
+.logout-icon { width: 18px; height: 18px; }
 .brand {
     display: flex;
     align-items: center;
@@ -209,19 +218,26 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     padding: 4px 6px 14px;
     border-bottom: 1px solid #1f2a44;
 }
-
 .brand-mark {
     width: 34px; height: 34px;
     border-radius: 8px;
-    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    background: linear-gradient(135deg, #1d4ed8, #0ea5e9);
     display: grid; place-items: center;
     color: #fff; font-weight: 700;
-    box-shadow: 0 6px 18px rgba(99,102,241,.35);
 }
-
 .brand-name { color: #fff; font-weight: 600; font-size: 15px; }
 .brand-sub  { color: #64748b; font-size: 11px; }
-
+.brand-text { min-width: 0; flex: 1; }
+.company-switcher {
+    margin-top: 8px;
+    width: 100%;
+    background: #111a2e;
+    color: #e2e8f0;
+    border: 1px solid #1f2a44;
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 11.5px;
+}
 .nav-group-label {
     font-size: 10.5px;
     letter-spacing: .12em;
@@ -230,9 +246,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     padding: 0 8px;
     margin-bottom: 6px;
 }
-
 .nav { display: flex; flex-direction: column; gap: 2px; }
-
 .nav-link {
     display: flex; align-items: center; gap: 10px;
     padding: 9px 10px;
@@ -241,18 +255,14 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     font-size: 13.5px;
     transition: background .15s, color .15s;
 }
-
 .nav-link:hover { background: #111a2e; color: #fff; }
-
 .nav-link.active {
-    background: linear-gradient(90deg, rgba(99,102,241,.18), rgba(99,102,241,.02));
+    background: linear-gradient(90deg, rgba(29,78,216,.18), rgba(29,78,216,.02));
     color: #fff;
-    box-shadow: inset 0 0 0 1px rgba(99,102,241,.35);
+    box-shadow: inset 0 0 0 1px rgba(59,130,246,.35);
 }
-
 .nav .dot { width: 6px; height: 6px; border-radius: 50%; background: #334155; }
-.nav-link.active .dot { background: #818cf8; box-shadow: 0 0 0 3px rgba(129,140,248,.25); }
-
+.nav-link.active .dot { background: #60a5fa; box-shadow: 0 0 0 3px rgba(96,165,250,.25); }
 .sidebar-footer {
     margin-top: auto;
     padding: 12px;
@@ -260,38 +270,27 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     background: #0f1a30;
     display: flex; align-items: center; gap: 10px;
 }
-
+.user-card { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
 .avatar {
     width: 34px; height: 34px; border-radius: 50%;
-    background: linear-gradient(135deg,#f59e0b,#ef4444);
+    background: linear-gradient(135deg,#0ea5e9,#1d4ed8);
     color: #fff; font-weight: 600;
     display: grid; place-items: center;
 }
-
 .user-name { color: #fff; font-weight: 500; font-size: 13px; }
 .user-role { color: #64748b; font-size: 11.5px; }
-
-/* Main */
 .main { padding: 26px 34px 60px; overflow-x: hidden; }
-
 .topbar {
     display: flex; align-items: center; justify-content: space-between;
     margin-bottom: 22px;
 }
-
 .crumbs { color: #64748b; font-size: 12.5px; }
 .crumbs span { color: #0f172a; font-weight: 500; }
-
 .topbar-actions { display: flex; gap: 10px; }
-
-.page-header {
-    margin-bottom: 22px;
-}
-
+.page-header { margin-bottom: 22px; }
 .page-title {
     display: flex; align-items: flex-end; justify-content: space-between;
 }
-
 .page-title h1, .page-title h2 {
     margin: 0;
     font-size: 22px;
@@ -299,47 +298,22 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     letter-spacing: -0.01em;
     color: #0f172a;
 }
-
 .page-title p { margin: 6px 0 0; color: #64748b; font-size: 13.5px; max-width: 720px; }
-
 .btn {
     display: inline-flex; align-items: center; gap: 8px;
     padding: 9px 14px;
     border-radius: 8px;
     font-weight: 500;
     font-size: 13px;
-    transition: transform .08s, box-shadow .15s, background .15s;
 }
-
-.btn:active { transform: translateY(1px); }
-
-.btn-primary {
-    background: #4f46e5;
-    color: #fff;
-    box-shadow: 0 6px 16px rgba(79,70,229,.28);
-}
-
-.btn-primary:hover { background: #4338ca; }
-
 .btn-ghost {
     background: #fff;
     color: #0f172a;
     border: 1px solid #e2e8f0;
 }
-
 .btn-ghost:hover { background: #f8fafc; }
-
-.page-content {
-    /* Additional page content styles */
-}
-
-/* Responsive */
 @media (max-width: 768px) {
-    .app {
-        grid-template-columns: 1fr;
-    }
-    .sidebar {
-        display: none;
-    }
+    .app { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
 }
 </style>

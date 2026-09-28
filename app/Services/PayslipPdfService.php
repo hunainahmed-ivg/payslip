@@ -22,20 +22,7 @@ class PayslipPdfService
             );
         }
 
-        $profile = CompanyProfile::first();
-
-        $html = view('payslips.template', [
-            'payslip' => $payslip,
-            'snapshot' => $payslip->snapshot,
-            'profile' => $profile,
-            // DOMPDF reads images from absolute filesystem paths
-            'headerPath' => $profile?->header_image_path
-                ? Storage::disk('public')->path($profile->header_image_path)
-                : null,
-            'footerPath' => $profile?->footer_image_path
-                ? Storage::disk('public')->path($profile->footer_image_path)
-                : null,
-        ])->render();
+        $html = $this->renderHtml($payslip);
 
         $pdf = Pdf::loadHTML($html)->setPaper('a4', 'portrait');
 
@@ -60,10 +47,74 @@ class PayslipPdfService
         }
     }
 
-        /**
+    /**
+     * Render the selected payslip HTML template from the frozen snapshot.
+     */
+    public function renderHtml(Payslip $payslip, bool $stamped = false, array $stamp = [], bool $forBrowser = false): string
+    {
+        if (empty($payslip->snapshot) || ! is_array($payslip->snapshot)) {
+            throw new \RuntimeException('Payslip snapshot is missing.');
+        }
+
+        $profile = $this->resolveCompanyProfile($payslip);
+        $view = $this->resolveTemplateView($profile);
+
+        $headerPath = null;
+        $footerPath = null;
+
+        if ($profile?->header_image_path) {
+            $headerPath = $forBrowser
+                ? Storage::disk('public')->url($profile->header_image_path)
+                : Storage::disk('public')->path($profile->header_image_path);
+        }
+
+        if ($profile?->footer_image_path) {
+            $footerPath = $forBrowser
+                ? Storage::disk('public')->url($profile->footer_image_path)
+                : Storage::disk('public')->path($profile->footer_image_path);
+        }
+
+        return view($view, [
+            'payslip' => $payslip,
+            'snapshot' => $payslip->snapshot,
+            'profile' => $profile,
+            'headerPath' => $headerPath,
+            'footerPath' => $footerPath,
+            'stamped' => $stamped,
+            'stamp' => $stamp,
+        ])->render();
+    }
+
+    private function resolveCompanyProfile(Payslip $payslip): ?CompanyProfile
+    {
+        $payslip->loadMissing('employee.branch', 'payrollRun');
+
+        $companyId = $payslip->payrollRun?->company_id
+            ?? $payslip->employee?->branch?->company_id;
+
+        if ($companyId) {
+            return CompanyProfile::query()->find($companyId);
+        }
+
+        return CompanyProfile::query()->orderBy('id')->first();
+    }
+
+    private function resolveTemplateView(?CompanyProfile $profile): string
+    {
+        $type = $profile?->template_type ?? 'modern';
+
+        return match ($type) {
+            'classic' => 'payslips.classic',
+            'compact' => 'payslips.compact',
+            'custom' => filled($profile?->custom_html)
+                ? 'payslips.custom'
+                : 'payslips.modern',
+            default => 'payslips.modern',
+        };
+    }
+
+    /**
      * Overlay a digital stamp/watermark onto the ORIGINAL locked payslip PDF.
-     * This does NOT re-render the payslip — it imports the existing private-disk
-     * PDF page-by-page and draws the stamp on top (Phase 7 requirement).
      */
     public function generateStamped(StampedCopyRequest $stampedRequest): void
     {
@@ -73,13 +124,11 @@ class PayslipPdfService
             throw new \RuntimeException('Stamped request has no linked payslip.');
         }
 
-        // Immutable-snapshot guard (consistent with Step 3 Part 2).
         $snapshot = $payslip->snapshot;
         if (empty($snapshot) || ! is_array($snapshot)) {
             throw new \RuntimeException('Payslip snapshot missing; refusing to stamp.');
         }
 
-        // The locked original must exist on the private disk.
         $originalPath = $payslip->pdf_path;
         if (! $originalPath || ! Storage::disk('private')->exists($originalPath)) {
             throw new \RuntimeException(
@@ -88,18 +137,17 @@ class PayslipPdfService
         }
 
         $stampedRequest->loadMissing('reviewer', 'employee');
-        $payslip->loadMissing('employee', 'branch');
+        $payslip->loadMissing('employee.branch');
 
-        $profile   = CompanyProfile::first();
-        $company   = $profile->company_name ?? ($snapshot['company_name'] ?? 'Company');
+        $profile = $this->resolveCompanyProfile($payslip);
+        $company = $profile->company_name ?? ($snapshot['company_name'] ?? 'Company');
         $reference = 'REQ-'.str_pad((string) $stampedRequest->id, 5, '0', STR_PAD_LEFT);
-        $reason    = $stampedRequest->reason_label ?? $stampedRequest->reason ?? 'Official use';
+        $reason = $stampedRequest->reason_label ?? $stampedRequest->reason ?? 'Official use';
         $approvedBy = $stampedRequest->reviewer?->name ?? 'HR Department';
         $approvedAt = ($stampedRequest->reviewed_at ?? now())->format('d M Y');
 
         $sourceAbsolute = Storage::disk('private')->path($originalPath);
 
-        // FPDI + TCPDF wrapper: import original pages, draw on top.
         $pdf = new \setasign\Fpdi\Tcpdf\Fpdi('P', 'mm', 'A4');
         $pdf->SetAutoPageBreak(false, 0);
         $pdf->setPrintHeader(false);
@@ -111,15 +159,13 @@ class PayslipPdfService
 
         for ($p = 1; $p <= $pageCount; $p++) {
             $tplId = $pdf->importPage($p);
-            $size  = $pdf->getTemplateSize($tplId);
-            $w     = (float) $size['width'];
-            $h     = (float) $size['height'];
+            $size = $pdf->getTemplateSize($tplId);
+            $w = (float) $size['width'];
+            $h = (float) $size['height'];
 
-            // Recreate the page at the ORIGINAL size, then place the original page as-is.
             $pdf->AddPage('P', [$w, $h]);
             $pdf->useTemplate($tplId, 0, 0, $w, $h, true);
 
-            // --- Diagonal watermark on EVERY page ---
             $pdf->SetAlpha(0.10);
             $pdf->SetFont('helvetica', 'B', max(26, (int) round($w / 7)));
             $pdf->SetTextColor(15, 23, 42);
@@ -129,32 +175,27 @@ class PayslipPdfService
             $pdf->StopTransform();
             $pdf->SetAlpha(1);
 
-            // --- Formal stamp box on the FIRST page only ---
             if ($p === 1) {
                 $boxW = 80;
                 $boxH = 42;
                 $boxX = $w - $boxW - 12;
                 $boxY = $h - $boxH - 16;
 
-                // Double-border stamp frame (green).
                 $pdf->SetDrawColor(22, 163, 74);
                 $pdf->SetLineWidth(0.7);
                 $pdf->Rect($boxX, $boxY, $boxW, $boxH);
                 $pdf->SetLineWidth(0.3);
                 $pdf->Rect($boxX + 1.6, $boxY + 1.6, $boxW - 3.2, $boxH - 3.2);
 
-                // Company name
                 $pdf->SetTextColor(22, 163, 74);
                 $pdf->SetFont('helvetica', 'B', 8);
                 $pdf->SetXY($boxX + 3, $boxY + 3);
                 $pdf->Cell($boxW - 6, 4, $company, 0, 0, 'L');
 
-                // Headline
                 $pdf->SetFont('helvetica', 'B', 11);
                 $pdf->SetXY($boxX + 3, $boxY + 7.5);
                 $pdf->Cell($boxW - 6, 5, 'OFFICIALLY VERIFIED', 0, 0, 'L');
 
-                // Detail lines
                 $pdf->SetTextColor(15, 23, 42);
                 $pdf->SetFont('helvetica', '', 7.5);
                 $lines = [
@@ -170,7 +211,6 @@ class PayslipPdfService
                     $yy += 4;
                 }
 
-                // Signature rule + caption
                 $pdf->SetDrawColor(22, 163, 74);
                 $pdf->SetLineWidth(0.4);
                 $pdf->Line($boxX + 3, $boxY + $boxH - 7, $boxX + $boxW - 3, $boxY + $boxH - 7);

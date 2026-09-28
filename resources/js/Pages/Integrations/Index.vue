@@ -1,7 +1,19 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import { Head } from '@inertiajs/vue3';
+import { computed, ref } from 'vue';
+import { Head, Link } from '@inertiajs/vue3';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
+
+interface SyncEvent {
+    id: number;
+    period: string | null;
+    status: string;
+    records_total: number | null;
+    records_created: number | null;
+    records_updated: number | null;
+    records_failed: number | null;
+    created_at: string;
+    error_message: string | null;
+}
 
 interface ApiSyncRow {
     id: number;
@@ -16,14 +28,26 @@ interface ApiSyncRow {
 
 const props = defineProps<{
     webhookUrl: string;
-    tokenConfigured: boolean;
-    tokenMasked: string;
+    secretConfigured: boolean;
+    secretMasked: string;
+    signatureHeader: string;
+    timestampHeader: string;
+    idempotencyHeader: string;
     apiSyncCount: number;
     csvSyncCount: number;
     recentApiSyncs: ApiSyncRow[];
+    recentEvents: SyncEvent[];
 }>();
 
 const copied = ref<string | null>(null);
+const syncPeriod = ref(new Date().toISOString().slice(0, 7));
+const syncLoading = ref(false);
+const syncResult = ref<{
+    period: string;
+    api_records: number;
+    last_event: SyncEvent | null;
+} | null>(null);
+const syncError = ref<string | null>(null);
 
 const copy = async (text: string, key: string) => {
     try {
@@ -31,7 +55,7 @@ const copy = async (text: string, key: string) => {
         copied.value = key;
         setTimeout(() => (copied.value = null), 2000);
     } catch {
-        // clipboard blocked — ignore silently
+        // clipboard blocked
     }
 };
 
@@ -45,15 +69,44 @@ const samplePayload = `{
       "unpaid_leave_days": 2,
       "paid_leave_days": 0,
       "overtime_hours": 12.5,
-      "late_count": 0
+      "late_count": 0,
+      "bonus_amount": 500,
+      "overtime_pay": 0
     }
   ]
 }`;
 
-const sampleCurl = `curl -X POST ${props.webhookUrl} \\
+const sampleCurl = computed(() => `curl -X POST ${props.webhookUrl} \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer <VIRTUOHR_API_TOKEN>" \\
-  -d '${samplePayload.replace(/\s+/g, ' ')}'`;
+  -H "${props.signatureHeader}: sha256=<hmac_hex>" \\
+  -H "${props.timestampHeader}: <unix_timestamp>" \\
+  -H "${props.idempotencyHeader}: <unique-key>" \\
+  -d '${samplePayload.replace(/\s+/g, ' ')}'`);
+
+const checkSyncStatus = async () => {
+    syncLoading.value = true;
+    syncError.value = null;
+    try {
+        const response = await fetch(
+            route('settings.integrations.sync-status') + '?period=' + encodeURIComponent(syncPeriod.value),
+            {
+                headers: {
+                    Accept: 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                credentials: 'same-origin',
+            },
+        );
+        if (!response.ok) {
+            throw new Error('Unable to load sync status.');
+        }
+        syncResult.value = await response.json();
+    } catch (e) {
+        syncError.value = e instanceof Error ? e.message : 'Unable to load sync status.';
+    } finally {
+        syncLoading.value = false;
+    }
+};
 </script>
 
 <template>
@@ -63,21 +116,20 @@ const sampleCurl = `curl -X POST ${props.webhookUrl} \\
         <template #header>
             <div>
                 <h1>Integrations</h1>
-                <p>VirtuoHR webhook endpoint, API authentication and ingestion statistics.</p>
+                <p>VirtuoHR webhook endpoint, HMAC authentication, and monthly sync status.</p>
             </div>
         </template>
 
         <div class="py-6">
             <div class="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-                <!-- Webhook configuration -->
                 <div class="card">
                     <div class="mb-4 flex items-center justify-between">
                         <h2 class="text-sm font-semibold text-gray-900">VirtuoHR Webhook</h2>
                         <span
                             class="rounded-full px-2 py-0.5 text-xs font-medium uppercase"
-                            :class="tokenConfigured ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'"
+                            :class="secretConfigured ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'"
                         >
-                            {{ tokenConfigured ? 'Active' : 'Token Missing' }}
+                            {{ secretConfigured ? 'Configured' : 'Secret Missing' }}
                         </span>
                     </div>
 
@@ -87,7 +139,7 @@ const sampleCurl = `curl -X POST ${props.webhookUrl} \\
                             <div class="flex items-center gap-2">
                                 <code class="flex-1 rounded-md bg-gray-100 px-3 py-2 text-xs text-indigo-600">{{ webhookUrl }}</code>
                                 <button class="rounded-md border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50" @click="copy(webhookUrl, 'url')">
-                                    {{ copied === 'url' ? '✓ Copied' : 'Copy' }}
+                                    {{ copied === 'url' ? 'Copied' : 'Copy' }}
                                 </button>
                             </div>
                         </div>
@@ -97,31 +149,58 @@ const sampleCurl = `curl -X POST ${props.webhookUrl} \\
                                 <code class="rounded-md bg-gray-100 px-3 py-2 text-xs font-semibold text-gray-900">POST</code>
                             </div>
                             <div>
-                                <div class="mb-1 text-xs uppercase tracking-wider text-gray-500">Auth Header</div>
-                                <code class="rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-700">Authorization: Bearer …</code>
+                                <div class="mb-1 text-xs uppercase tracking-wider text-gray-500">Auth</div>
+                                <code class="rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-700">HMAC-SHA256</code>
                             </div>
                         </div>
                         <div>
-                            <div class="mb-1 text-xs uppercase tracking-wider text-gray-500">Shared Secret (masked)</div>
-                            <div class="flex items-center gap-2">
-                                <code class="flex-1 rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-700">{{ tokenMasked }}</code>
-                                <button
-                                    class="rounded-md border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-                                    :disabled="!tokenConfigured"
-                                    @click="copy(tokenMasked, 'token')"
-                                >
-                                    {{ copied === 'token' ? '✓ Copied' : 'Copy' }}
-                                </button>
-                            </div>
-                            <p class="mt-1 text-xs text-gray-400">Full token sirf server .env mein hai — kabhi UI par expose nahi hota.</p>
+                            <div class="mb-1 text-xs uppercase tracking-wider text-gray-500">Signature Header</div>
+                            <code class="rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-700">{{ signatureHeader }}: sha256=&lt;hex&gt;</code>
+                        </div>
+                        <div>
+                            <div class="mb-1 text-xs uppercase tracking-wider text-gray-500">Webhook Secret (masked)</div>
+                            <code class="rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-700">{{ secretMasked }}</code>
+                            <p class="mt-1 text-xs text-gray-400">Set VIRTUOHR_WEBHOOK_SECRET in the server environment. The full secret is never shown in the UI.</p>
                         </div>
                     </div>
                 </div>
 
-                <!-- Ingestion mix -->
                 <div class="card">
-                    <h2 class="mb-4 text-sm font-semibold text-gray-900">Ingestion Mix (payroll_inputs)</h2>
-                    <div class="grid grid-cols-2 gap-4">
+                    <h2 class="mb-4 text-sm font-semibold text-gray-900">Check VirtuoHR Sync Status</h2>
+                    <p class="mb-4 text-sm text-gray-600">
+                        VirtuoHR pushes attendance and leave data to this webhook at month-end. Select a period to confirm what has been received.
+                    </p>
+                    <div class="flex flex-wrap items-end gap-3">
+                        <div>
+                            <label class="mb-1 block text-xs uppercase tracking-wider text-gray-500">Period</label>
+                            <input
+                                v-model="syncPeriod"
+                                type="month"
+                                class="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                            />
+                        </div>
+                        <button
+                            class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+                            :disabled="syncLoading"
+                            @click="checkSyncStatus"
+                        >
+                            {{ syncLoading ? 'Checking…' : 'Check Sync Status' }}
+                        </button>
+                    </div>
+                    <div v-if="syncError" class="mt-3 text-sm text-red-600">{{ syncError }}</div>
+                    <div v-if="syncResult" class="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm">
+                        <div class="font-semibold text-gray-900">Period {{ syncResult.period }}</div>
+                        <div class="mt-1 text-gray-600">API records received: <strong>{{ syncResult.api_records }}</strong></div>
+                        <div v-if="syncResult.last_event" class="mt-2 text-gray-600">
+                            Last webhook:
+                            <strong>{{ syncResult.last_event.status }}</strong>
+                            · {{ syncResult.last_event.records_total ?? 0 }} records
+                            · {{ new Date(syncResult.last_event.created_at).toLocaleString() }}
+                        </div>
+                        <div v-else class="mt-2 text-gray-500">No webhook events recorded for this period yet.</div>
+                    </div>
+
+                    <div class="mt-5 grid grid-cols-2 gap-4">
                         <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
                             <div class="text-xs uppercase tracking-wider text-gray-500">API Syncs</div>
                             <div class="mt-1 text-2xl font-bold text-indigo-600">{{ apiSyncCount }}</div>
@@ -131,47 +210,47 @@ const sampleCurl = `curl -X POST ${props.webhookUrl} \\
                             <div class="mt-1 text-2xl font-bold text-emerald-600">{{ csvSyncCount }}</div>
                         </div>
                     </div>
-
-                    <div class="mt-5">
-                        <div class="mb-2 text-xs uppercase tracking-wider text-gray-500">Recent API Syncs</div>
-                        <div v-if="recentApiSyncs.length" class="space-y-2">
-                            <div
-                                v-for="row in recentApiSyncs"
-                                :key="row.id"
-                                class="flex items-center justify-between rounded-md border border-gray-100 px-3 py-2 text-sm"
-                            >
-                                <div>
-                                    <span class="font-medium text-gray-900">{{ row.employee?.full_name ?? '—' }}</span>
-                                    <span class="ml-2 text-xs text-gray-400">{{ row.employee?.employee_code }}</span>
-                                </div>
-                                <div class="text-xs text-gray-500">{{ row.period }} · unpaid {{ row.unpaid_leave_days }}d</div>
-                            </div>
-                        </div>
-                        <p v-else class="text-sm text-gray-400">No API syncs yet — use the sample cURL below.</p>
-                    </div>
                 </div>
             </div>
 
-            <!-- Sample payload -->
             <div class="card mb-6">
                 <div class="mb-3 flex items-center justify-between">
-                    <h2 class="text-sm font-semibold text-gray-900">Sample Payload (Phase 4 standard)</h2>
+                    <h2 class="text-sm font-semibold text-gray-900">Sample Monthly Payload</h2>
                     <button class="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50" @click="copy(samplePayload, 'payload')">
-                        {{ copied === 'payload' ? '✓ Copied' : 'Copy' }}
+                        {{ copied === 'payload' ? 'Copied' : 'Copy' }}
                     </button>
                 </div>
                 <pre class="code-block">{{ samplePayload }}</pre>
             </div>
 
-            <!-- Sample cURL -->
-            <div class="card">
+            <div class="card mb-6">
                 <div class="mb-3 flex items-center justify-between">
-                    <h2 class="text-sm font-semibold text-gray-900">Test Command (cURL)</h2>
+                    <h2 class="text-sm font-semibold text-gray-900">Test Command (cURL with HMAC)</h2>
                     <button class="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50" @click="copy(sampleCurl, 'curl')">
-                        {{ copied === 'curl' ? '✓ Copied' : 'Copy' }}
+                        {{ copied === 'curl' ? 'Copied' : 'Copy' }}
                     </button>
                 </div>
                 <pre class="code-block">{{ sampleCurl }}</pre>
+            </div>
+
+            <div class="card">
+                <h2 class="mb-4 text-sm font-semibold text-gray-900">Recent Webhook Events</h2>
+                <div v-if="recentEvents.length" class="space-y-2">
+                    <div
+                        v-for="event in recentEvents"
+                        :key="event.id"
+                        class="flex items-center justify-between rounded-md border border-gray-100 px-3 py-2 text-sm"
+                    >
+                        <div>
+                            <span class="font-medium text-gray-900">{{ event.period ?? '—' }}</span>
+                            <span class="ml-2 text-xs uppercase text-gray-500">{{ event.status }}</span>
+                        </div>
+                        <div class="text-xs text-gray-500">
+                            {{ event.records_total ?? 0 }} records · {{ new Date(event.created_at).toLocaleString() }}
+                        </div>
+                    </div>
+                </div>
+                <p v-else class="text-sm text-gray-400">No webhook events yet.</p>
             </div>
         </div>
     </AuthenticatedLayout>
@@ -190,7 +269,7 @@ const sampleCurl = `curl -X POST ${props.webhookUrl} \\
     color: #cbd5e1;
     border-radius: 10px;
     padding: 14px 16px;
-    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-family: Consolas, monospace;
     font-size: 12px;
     line-height: 1.6;
     overflow-x: auto;

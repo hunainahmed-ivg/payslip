@@ -3,11 +3,12 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class SalaryComponent extends Model
 {
     protected $fillable = [
-        'name', 'slug', 'type', 'calculation_type',
+        'company_id', 'name', 'slug', 'type', 'calculation_type',
         'default_value', 'is_taxable', 'is_active', 'description',
     ];
 
@@ -16,6 +17,11 @@ class SalaryComponent extends Model
         'is_active' => 'boolean',
         'default_value' => 'decimal:2',
     ];
+
+    public function company(): BelongsTo
+    {
+        return $this->belongsTo(CompanyProfile::class, 'company_id');
+    }
 
     public function scopeEarnings($query)
     {
@@ -32,10 +38,11 @@ class SalaryComponent extends Model
         return $query->where('is_active', true);
     }
 
-    /**
-     * Phase 2 calculation rule from the architecture doc:
-     * Fixed → use amount as-is. Percentage → (Basic × Percentage) / 100.
-     */
+    public function scopeForCompany($query, ?int $companyId)
+    {
+        return $query->when($companyId, fn ($q) => $q->where('company_id', $companyId));
+    }
+
     public function compute(float $basicSalary): float
     {
         return match ($this->calculation_type) {

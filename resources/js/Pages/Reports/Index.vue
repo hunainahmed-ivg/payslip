@@ -39,11 +39,11 @@ const fmt = (v: number | string) =>
     Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const statCards = [
-    { key: 'active_employees', label: 'Active Employees', icon: '👥', color: 'text-indigo-600' },
-    { key: 'branches', label: 'Branches', icon: '🏢', color: 'text-sky-600' },
-    { key: 'payroll_runs', label: 'Payroll Runs', icon: '🗓️', color: 'text-amber-600' },
-    { key: 'published_payslips', label: 'Payslips Published', icon: '📄', color: 'text-emerald-600' },
-    { key: 'pending_requests', label: 'Pending Requests', icon: '🖋️', color: 'text-red-600' },
+    { key: 'active_employees', label: 'Active Employees', color: 'text-indigo-600' },
+    { key: 'branches', label: 'Branches', color: 'text-sky-600' },
+    { key: 'payroll_runs', label: 'Payroll Runs', color: 'text-amber-600' },
+    { key: 'published_payslips', label: 'Payslips Published', color: 'text-emerald-600' },
+    { key: 'pending_requests', label: 'Pending Requests', color: 'text-red-600' },
 ] as const;
 </script>
 
@@ -53,8 +53,8 @@ const statCards = [
     <AuthenticatedLayout>
         <template #header>
             <div>
-                <h1>Reports & Analytics</h1>
-                <p>System statistics, payroll execution summaries and multi-currency breakdowns.</p>
+                <h1>Reports</h1>
+                <p>System statistics, payroll summaries, and multi-currency breakdowns.</p>
             </div>
         </template>
 
@@ -64,7 +64,6 @@ const statCards = [
                 <div v-for="card in statCards" :key="card.key" class="card">
                     <div class="flex items-center justify-between">
                         <span class="text-xs uppercase tracking-wider text-gray-500">{{ card.label }}</span>
-                        <span>{{ card.icon }}</span>
                     </div>
                     <div class="mt-2 text-2xl font-bold" :class="card.color">{{ props.stats[card.key] }}</div>
                 </div>

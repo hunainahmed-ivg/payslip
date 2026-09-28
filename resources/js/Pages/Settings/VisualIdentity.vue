@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
 import { Head, useForm } from '@inertiajs/vue3';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import PrimaryButton from '@/Components/PrimaryButton.vue';
@@ -25,6 +25,7 @@ const props = defineProps<{
         accent_color: string;
         font_family: string;
         page_margin: string;
+        tax_brackets: Array<{ from: number | string; to: number | string | null; rate: number | string }> | null;
     };
     success?: string;
 }>();
@@ -44,11 +45,41 @@ const form = useForm({
     accent_color: props.profile.accent_color,
     font_family: props.profile.font_family,
     page_margin: props.profile.page_margin,
+    tax_brackets: [] as Array<{ from: string; to: string; rate: string }>,
 });
+
+form.tax_brackets = (props.profile.tax_brackets || []).map((b) => ({
+    from: String(b.from ?? 0),
+    to: b.to === null || b.to === undefined ? '' : String(b.to),
+    rate: String(b.rate ?? 0),
+}));
 
 const headerPreview = ref(props.profile.header_image_url);
 const footerPreview = ref(props.profile.footer_image_url);
 const templateOptions: Array<'modern' | 'classic' | 'compact'> = ['modern', 'classic', 'compact'];
+
+watch(
+    () => [props.profile.header_image_url, props.profile.footer_image_url, props.profile.template_type],
+    ([header, footer, templateType]) => {
+        if (!form.header_image) {
+            headerPreview.value = header as string | null;
+        }
+        if (!form.footer_image) {
+            footerPreview.value = footer as string | null;
+        }
+        if (templateType) {
+            form.template_type = templateType as 'modern' | 'classic' | 'compact' | 'custom';
+        }
+    },
+);
+
+const addBracket = () => {
+    form.tax_brackets.push({ from: '0', to: '', rate: '0' });
+};
+
+const removeBracket = (index: number) => {
+    form.tax_brackets.splice(index, 1);
+};
 
 const handleHeaderUpload = (event: Event) => {
     const file = (event.target as HTMLInputElement).files?.[0];
@@ -81,22 +112,32 @@ const removeFooter = () => {
 };
 
 const submit = () => {
-    form.post(route('settings.visual-identity.update'), {
-        forceFormData: true, // Required for Inertia file uploads
+    form.transform((data) => ({
+        ...data,
+        remove_header: data.remove_header ? 1 : 0,
+        remove_footer: data.remove_footer ? 1 : 0,
+    })).post(route('settings.visual-identity.update'), {
+        forceFormData: true,
+        preserveScroll: true,
         onSuccess: () => {
-            form.clearErrors('header_image', 'footer_image');
+            form.header_image = null;
+            form.footer_image = null;
+            form.remove_header = false;
+            form.remove_footer = false;
+            form.clearErrors();
+            form.transform((data) => data);
         },
     });
 };
 </script>
 
 <template>
-    <Head title="Visual Identity Configuration" />
+    <Head title="Visual Identity" />
 
     <AuthenticatedLayout>
         <template #header>
-            <h1>Visual Identity Configuration</h1>
-            <p>Configure your company's letterhead, branding, and payslip templates.</p>
+            <h1>Visual Identity</h1>
+            <p>Configure company letterhead, branding, payslip templates, and income tax brackets.</p>
         </template>
 
         <div class="py-6">
@@ -170,7 +211,8 @@ const submit = () => {
 
                 <!-- Template Selection -->
                 <div class="card">
-                    <h3 class="text-lg font-medium text-gray-900 mb-4">Template Selection Engine</h3>
+                    <h3 class="text-lg font-medium text-gray-900 mb-4">Payslip Template</h3>
+                    <p class="mb-4 text-sm text-gray-500">This layout is used for PDF generation and HTML preview.</p>
                     <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
                         <div 
                             v-for="tpl in templateOptions" 
@@ -192,6 +234,7 @@ const submit = () => {
                             </div>
                         </div>
                     </div>
+                    <InputError :message="form.errors.template_type" class="mt-2" />
                 </div>
 
                 <!-- Custom HTML (Enterprise) -->
@@ -246,6 +289,43 @@ const submit = () => {
                                 <option value="18mm">18mm (Default)</option>
                                 <option value="25mm">25mm (Wide)</option>
                             </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Income Tax Brackets -->
+                <div class="card">
+                    <div class="mb-4 flex items-center justify-between">
+                        <div>
+                            <h3 class="text-lg font-medium text-gray-900">Income Tax Brackets</h3>
+                            <p class="mt-1 text-sm text-gray-500">Progressive rates applied to taxable gross when an employee has no fixed tax override.</p>
+                        </div>
+                        <SecondaryButton type="button" @click="addBracket">Add Bracket</SecondaryButton>
+                    </div>
+                    <div v-if="!form.tax_brackets.length" class="rounded-md border border-dashed border-gray-300 p-4 text-sm text-gray-500">
+                        No brackets configured. Income tax will only apply when an employee has a fixed override.
+                    </div>
+                    <div v-else class="space-y-3">
+                        <div
+                            v-for="(bracket, index) in form.tax_brackets"
+                            :key="index"
+                            class="grid grid-cols-1 gap-3 md:grid-cols-4"
+                        >
+                            <div>
+                                <InputLabel :value="`From`" />
+                                <TextInput v-model="bracket.from" type="number" min="0" step="0.01" class="mt-1 block w-full" />
+                            </div>
+                            <div>
+                                <InputLabel value="To (blank = unlimited)" />
+                                <TextInput v-model="bracket.to" type="number" min="0" step="0.01" class="mt-1 block w-full" />
+                            </div>
+                            <div>
+                                <InputLabel value="Rate %" />
+                                <TextInput v-model="bracket.rate" type="number" min="0" max="100" step="0.01" class="mt-1 block w-full" />
+                            </div>
+                            <div class="flex items-end">
+                                <SecondaryButton type="button" @click="removeBracket(index)">Remove</SecondaryButton>
+                            </div>
                         </div>
                     </div>
                 </div>

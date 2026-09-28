@@ -6,7 +6,9 @@ import PrimaryButton from '@/Components/PrimaryButton.vue';
 import SecondaryButton from '@/Components/SecondaryButton.vue';
 import InputError from '@/Components/InputError.vue';
 import InputLabel from '@/Components/InputLabel.vue';
+import TextInput from '@/Components/TextInput.vue';
 import Modal from '@/Components/Modal.vue';
+import PayslipPreviewModal from '@/Components/PayslipPreviewModal.vue';
 
 interface Payslip {
     id: number;
@@ -44,6 +46,8 @@ const props = defineProps<{
 }>();
 
 const requesting = ref<Payslip | null>(null);
+const previewUrl = ref<string | null>(null);
+const previewTitle = ref('Payslip Preview');
 
 const requestForm = useForm({
     payslip_id: null as number | null,
@@ -51,7 +55,6 @@ const requestForm = useForm({
     reason_note: '',
 });
 
-// Payslips jinki pending request already hai — button disable
 const pendingPayslipIds = computed(() =>
     props.requests.filter((r) => r.status === 'pending').map((r) => r.payslip_id),
 );
@@ -80,6 +83,11 @@ const openRequest = (payslip: Payslip) => {
     requestForm.clearErrors();
 };
 
+const openPreview = (payslip: Payslip) => {
+    previewTitle.value = `Preview — ${formatDate(payslip.period)}`;
+    previewUrl.value = route('portal.payslips.preview', payslip.id);
+};
+
 const submitRequest = () => {
     requestForm.post(route('portal.stamped-requests.store'), {
         preserveScroll: true,
@@ -97,8 +105,8 @@ const submitRequest = () => {
         <template #header>
             <div>
                 <h1>My Payslips</h1>
-                <p v-if="employee">Welcome back, {{ employee.full_name }} ({{ employee.employee_code }})</p>
-                <p v-else>Employee Portal</p>
+                <p v-if="employee">Welcome, {{ employee.full_name }} ({{ employee.employee_code }})</p>
+                <p v-else>Employee portal for published payslips and stamped copy requests.</p>
             </div>
         </template>
 
@@ -107,14 +115,13 @@ const submitRequest = () => {
             <div v-if="error" class="mb-4 rounded-md bg-red-50 p-4 text-sm text-red-700">{{ error }}</div>
 
             <div v-if="!employee" class="card bg-amber-50 text-amber-800" style="border-color: #fde68a;">
-                <p class="font-semibold">Admin / HR View</p>
+                <p class="font-semibold">No employee profile linked</p>
                 <p class="mt-1 text-sm">
-                    Your login is not linked to an employee profile. Please log in as an employee (e.g., bilal.ahmed@northwind.com) to view payslips.
+                    This account is not linked to an employee record. Contact HR if you need portal access.
                 </p>
             </div>
 
             <template v-else>
-                <!-- Payslip cards -->
                 <div v-if="payslips.length === 0" class="card py-12 text-center">
                     <p class="text-gray-500">No payslips have been published for you yet.</p>
                 </div>
@@ -147,47 +154,42 @@ const submitRequest = () => {
                         </div>
 
                         <div class="mt-6 space-y-2">
-                            <div class="mt-6 space-y-2">
-                                <div class="flex gap-2">
-                                    <a
-                                        v-if="payslip.pdf_url"
-                                        :href="payslip.pdf_url"
-                                        target="_blank"
-                                        rel="noopener"
-                                        class="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50"
-                                    >
-                                        👁 View Payslip
-                                    </a>
-
-                                    <a
-                                        v-if="payslip.pdf_download_url"
-                                        :href="payslip.pdf_download_url"
-                                        class="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500"
-                                    >
-                                        ⬇ Download PDF
-                                    </a>
-                                </div>
-
+                            <div class="flex gap-2">
                                 <button
-                                    v-if="pendingPayslipIds.includes(payslip.id)"
-                                    disabled
-                                    class="w-full rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-700"
+                                    type="button"
+                                    class="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50"
+                                    @click="openPreview(payslip)"
                                 >
-                                    ⏳ Stamped Request Pending…
+                                    Preview
                                 </button>
-                                <button
-                                    v-else
-                                    class="w-full rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:border-indigo-300 hover:bg-indigo-50"
-                                    @click="openRequest(payslip)"
+
+                                <a
+                                    v-if="payslip.pdf_download_url"
+                                    :href="payslip.pdf_download_url"
+                                    class="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500"
                                 >
-                                    🖋 Request Official Stamped Copy
-                                </button>
+                                    Download PDF
+                                </a>
                             </div>
+
+                            <button
+                                v-if="pendingPayslipIds.includes(payslip.id)"
+                                disabled
+                                class="w-full rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-700"
+                            >
+                                Stamped Request Pending
+                            </button>
+                            <button
+                                v-else
+                                class="w-full rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:border-indigo-300 hover:bg-indigo-50"
+                                @click="openRequest(payslip)"
+                            >
+                                Request Official Stamped Copy
+                            </button>
                         </div>
                     </div>
                 </div>
 
-                <!-- Request History -->
                 <div class="card mt-8 overflow-hidden p-0">
                     <div class="border-b border-gray-100 bg-gray-50 px-6 py-4">
                         <h2 class="text-sm font-semibold text-gray-900">Stamped Copy Request History</h2>
@@ -222,7 +224,7 @@ const submitRequest = () => {
                                             'bg-red-50 text-red-700': req.status === 'rejected',
                                         }"
                                     >
-                                        {{ req.status }}
+                                        {{ req.status === 'pending' ? 'Pending' : req.status === 'approved' ? 'Approved' : 'Rejected' }}
                                     </span>
                                     <div v-if="req.status === 'rejected' && req.review_note" class="mt-1 max-w-[200px] text-xs text-red-600">
                                         {{ req.review_note }}
@@ -242,7 +244,6 @@ const submitRequest = () => {
                                         >
                                             View
                                         </a>
-
                                         <a
                                             v-if="req.stamped_pdf_download_url"
                                             :href="req.stamped_pdf_download_url"
@@ -251,19 +252,13 @@ const submitRequest = () => {
                                             Download
                                         </a>
                                     </div>
-
-                                    <span v-else-if="req.status === 'approved'" class="text-xs text-gray-400">
-                                        Generating…
-                                    </span>
-
-                                    <span v-else class="text-xs text-gray-400">
-                                        Awaiting HR review
-                                    </span>
+                                    <span v-else-if="req.status === 'approved'" class="text-xs text-gray-400">Generating…</span>
+                                    <span v-else class="text-xs text-gray-400">Awaiting HR review</span>
                                 </td>
                             </tr>
                             <tr v-if="!requests.length">
                                 <td colspan="5" class="px-6 py-8 text-center text-sm text-gray-500">
-                                    No stamped copy requests yet. Use "Request Official Stamped Copy" on any payslip above.
+                                    No stamped copy requests yet.
                                 </td>
                             </tr>
                         </tbody>
@@ -271,13 +266,12 @@ const submitRequest = () => {
                 </div>
             </template>
 
-            <!-- Request Modal -->
             <Modal :show="!!requesting" @close="requesting = null">
                 <div class="p-6">
                     <h2 class="text-lg font-medium text-gray-900">Request Official Stamped Copy</h2>
                     <p class="mt-2 text-sm text-gray-600">
                         Payslip <span class="font-semibold">{{ requesting ? formatDate(requesting.period) : '' }}</span> —
-                        HR will review your request and apply an official digital watermark/stamp to the frozen snapshot.
+                        HR will review your request and apply an official digital stamp to the locked payslip.
                     </p>
                     <form class="mt-6 space-y-4" @submit.prevent="submitRequest">
                         <div>
@@ -311,6 +305,13 @@ const submitRequest = () => {
                     </form>
                 </div>
             </Modal>
+
+            <PayslipPreviewModal
+                :show="!!previewUrl"
+                :preview-url="previewUrl"
+                :title="previewTitle"
+                @close="previewUrl = null"
+            />
         </div>
     </AuthenticatedLayout>
 </template>
@@ -323,9 +324,7 @@ const submitRequest = () => {
     padding: 24px;
     box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
 }
-.card.p-0 {
-    padding: 0;
-}
+.card.p-0 { padding: 0; }
 .badge {
     font-size: 11px;
     font-weight: 600;

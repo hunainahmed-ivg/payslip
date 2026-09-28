@@ -28,7 +28,7 @@ defineProps<{
                     <p>Legal entity details printed on every payslip & stamped copy.</p>
                 </div>
                 <Link :href="route('settings.visual-identity')">
-                    <PrimaryButton>✏️ Edit in Visual Identity</PrimaryButton>
+                    <PrimaryButton>Edit in Visual Identity</PrimaryButton>
                 </Link>
             </div>
         </template>

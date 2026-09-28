@@ -5,7 +5,9 @@ namespace App\Http\Controllers;
 use App\Models\AuditLog;
 use App\Models\Payslip;
 use App\Models\StampedCopyRequest;
+use App\Services\PayslipPdfService;
 use Illuminate\Support\Facades\Storage;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class PayslipAccessController extends Controller
@@ -15,7 +17,7 @@ class PayslipAccessController extends Controller
      */
     public function viewPayslip(Payslip $payslip): StreamedResponse
     {
-        $this->authorizePayslip($payslip);
+        $this->authorizePayslipPdf($payslip);
 
         AuditLog::record(
             'payslip.viewed',
@@ -44,7 +46,7 @@ class PayslipAccessController extends Controller
      */
     public function downloadPayslip(Payslip $payslip): StreamedResponse
     {
-        $this->authorizePayslip($payslip);
+        $this->authorizePayslipPdf($payslip);
 
         AuditLog::record(
             'payslip.downloaded',
@@ -65,6 +67,26 @@ class PayslipAccessController extends Controller
                 'Cache-Control' => 'private, max-age=0, must-revalidate',
             ]
         );
+    }
+
+    /**
+     * HTML preview of the frozen payslip snapshot (modal-friendly).
+     */
+    public function previewHtml(Payslip $payslip, PayslipPdfService $pdfService): Response
+    {
+        $this->authorizePayslipPreview($payslip);
+
+        AuditLog::record(
+            'payslip.previewed',
+            'PSL-'.str_pad((string) $payslip->id, 6, '0', STR_PAD_LEFT),
+            $payslip->period.' · '.($payslip->employee?->employee_code ?? '')
+        );
+
+        return response($pdfService->renderHtml($payslip, false, [], true), 200, [
+            'Content-Type' => 'text/html; charset=UTF-8',
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control' => 'private, max-age=0, must-revalidate',
+        ]);
     }
 
     /**
@@ -124,15 +146,30 @@ class PayslipAccessController extends Controller
         );
     }
 
-    private function authorizePayslip(Payslip $payslip): void
+    private function authorizePayslipPdf(Payslip $payslip): void
     {
         abort_unless($payslip->status === 'published', 404);
         abort_unless($payslip->pdf_path, 404);
         abort_unless(Storage::disk('private')->exists($payslip->pdf_path), 404);
 
         $user = auth()->user();
-
         abort_unless($user, 401);
+        abort_unless($this->canAccessEmployee($user, $payslip->employee_id), 403);
+    }
+
+    private function authorizePayslipPreview(Payslip $payslip): void
+    {
+        abort_unless(in_array($payslip->status, ['approved', 'queued', 'generated', 'published'], true), 404);
+        abort_unless(! empty($payslip->snapshot), 404);
+
+        $user = auth()->user();
+        abort_unless($user, 401);
+
+        // Employees may only preview published payslips; admins may preview frozen drafts too.
+        if (! $this->isHrOrAdmin($user)) {
+            abort_unless($payslip->status === 'published', 403);
+        }
+
         abort_unless($this->canAccessEmployee($user, $payslip->employee_id), 403);
     }
 
@@ -145,7 +182,6 @@ class PayslipAccessController extends Controller
         abort_unless(Storage::disk('private')->exists($stampedRequest->stamped_pdf_path), 404);
 
         $user = auth()->user();
-
         abort_unless($user, 401);
 
         $employeeId = $stampedRequest->employee_id
@@ -170,12 +206,6 @@ class PayslipAccessController extends Controller
 
     private function ownsEmployee($user, int $employeeId): bool
     {
-        $userEmployeeId = $user->getAttribute('employee_id');
-
-        if ($userEmployeeId && (int) $userEmployeeId === $employeeId) {
-            return true;
-        }
-
         if (method_exists($user, 'employee')) {
             $employee = $user->employee;
 
@@ -193,25 +223,8 @@ class PayslipAccessController extends Controller
             return false;
         }
 
-        if (method_exists($user, 'hasRole')) {
-            return $user->hasRole(['hr', 'admin', 'super-admin', 'administrator']);
-        }
-
-        $role = $user->getAttribute('role')
-            ?? $user->getAttribute('user_role')
-            ?? null;
-
-        if (is_string($role)) {
-            return in_array(strtolower($role), [
-                'hr',
-                'admin',
-                'super-admin',
-                'administrator',
-            ], true);
-        }
-
-        if ((bool) $user->getAttribute('is_admin')) {
-            return true;
+        if (method_exists($user, 'isAdmin')) {
+            return $user->isAdmin();
         }
 
         return false;
@@ -222,9 +235,7 @@ class PayslipAccessController extends Controller
         $employeeCode = $payslip->employee?->employee_code ?? 'employee';
         $period = $payslip->period ?? 'payslip';
 
-        $filename = $employeeCode.'-'.$period.'.pdf';
-
-        return preg_replace('/[^A-Za-z0-9._-]/', '_', $filename);
+        return preg_replace('/[^A-Za-z0-9._-]/', '_', $employeeCode.'-'.$period.'.pdf');
     }
 
     private function stampedFilename(StampedCopyRequest $stampedRequest): string
@@ -236,8 +247,6 @@ class PayslipAccessController extends Controller
         $period = $stampedRequest->payslip?->period ?? 'stamped';
         $reference = 'REQ-'.str_pad((string) $stampedRequest->id, 5, '0', STR_PAD_LEFT);
 
-        $filename = $employeeCode.'-'.$period.'-stamped-'.$reference.'.pdf';
-
-        return preg_replace('/[^A-Za-z0-9._-]/', '_', $filename);
+        return preg_replace('/[^A-Za-z0-9._-]/', '_', $employeeCode.'-'.$period.'-stamped-'.$reference.'.pdf');
     }
 }

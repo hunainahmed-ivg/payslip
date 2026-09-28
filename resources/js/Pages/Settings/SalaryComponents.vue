@@ -141,7 +141,7 @@ const confirmDelete = () => {
         <template #header>
             <div class="flex flex-wrap items-center justify-between gap-4">
                 <div>
-                    <h1>Master Salary Components</h1>
+                    <h1>Salary Components</h1>
                     <p>Modular earnings & deduction rules used by the calculation engine.</p>
                 </div>
                 <PrimaryButton @click="openCreate">+ Add Component</PrimaryButton>

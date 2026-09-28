@@ -4,11 +4,17 @@ namespace App\Http\Controllers;
 
 use App\Models\Employee;
 use App\Models\PayrollInput;
+use App\Models\PayrollSyncEvent;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
+use App\Services\MonthlyPayrollImportService;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 class PayrollImportController extends Controller
 {
@@ -32,23 +38,74 @@ class PayrollImportController extends Controller
     }
 
     /**
+     * VirtuoHR sync status for a selected period (push webhook based).
+     */
+    public function syncStatus(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'period' => ['required', 'regex:/^\d{4}-(0[1-9]|1[0-2])$/'],
+        ]);
+
+        $period = $validated['period'];
+
+        return response()->json([
+            'period' => $period,
+            'api_records' => PayrollInput::where('period', $period)->where('source', 'api')->count(),
+            'csv_records' => PayrollInput::where('period', $period)->where('source', 'csv')->count(),
+            'last_event' => PayrollSyncEvent::where('period', $period)->latest()->first(),
+        ]);
+    }
+
+    /**
      * Download the standardized CSV template.
      */
-    public function template()
+    public function template(): StreamedResponse
     {
-        $rows = [
-            self::TEMPLATE_HEADERS,
-            ['EMP-8042', '2026-09', 22, 22, 0, 0, 0, 0],
-            ['EMP-1001', '2026-09', 22, 20, 2, 0, 4.5, 1],
-        ];
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
 
-        return response()->streamDownload(function () use ($rows) {
-            $out = fopen('php://output', 'w');
-            foreach ($rows as $row) {
-                fputcsv($out, $row);
-            }
-            fclose($out);
-        }, 'payroll-import-template.csv', ['Content-Type' => 'text/csv']);
+        $sheet->setTitle('Monthly Payroll Import');
+
+        $sheet->fromArray(
+            MonthlyPayrollImportService::HEADERS,
+            null,
+            'A1'
+        );
+
+        $sheet->fromArray([
+            'EMP-8042',
+            '2026-10',
+            26,
+            24,
+            2,
+            0,
+            4.5,
+            1,
+        ], null, 'A2');
+
+        $sheet->getStyle('A1:H1')->getFont()->setBold(true);
+
+        $instructions = $spreadsheet->createSheet();
+        $instructions->setTitle('Instructions');
+
+        $instructions->setCellValue('A1', 'Monthly Payroll Import Instructions');
+        $instructions->setCellValue('A3', '1. Do not change column headers in the Monthly Payroll Import sheet.');
+        $instructions->setCellValue('A4', '2. employee_code must match an existing employee.');
+        $instructions->setCellValue('A5', '3. period must be in YYYY-MM format, e.g. 2026-10.');
+        $instructions->setCellValue('A6', '4. total_working_days, attended_days, unpaid_leave_days, paid_leave_days, overtime_hours, late_count must be numeric.');
+        $instructions->setCellValue('A7', '5. This import updates or creates monthly payroll input records for the given employee and period.');
+        $instructions->setCellValue('A8', '6. Do not upload base salary here. Base salary belongs to employee master data.');
+
+        $writer = new Xlsx($spreadsheet);
+
+        $filename = 'monthly-payroll-import-template.xlsx';
+
+        return response()->streamDownload(function () use ($writer) {
+            $writer->save('php://output');
+        }, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Cache-Control' => 'max-age=0',
+        ]);
     }
 
     /**
@@ -56,9 +113,44 @@ class PayrollImportController extends Controller
      */
     public function dryRun(Request $request)
     {
-        $report = $this->buildReport($this->parseFile($request));
+        $request->validate([
+            'file' => ['required', 'file', 'mimes:xlsx,xls,csv', 'max:10240'],
+        ]);
 
-        return redirect()->route('payroll.import')->with('report', $report);
+        try {
+            $report = app(MonthlyPayrollImportService::class)->process(
+                $request->file('file'),
+                dryRun: true
+            );
+        } catch (\Throwable $e) {
+            $report = [
+                'valid' => false,
+                'dry_run' => true,
+                'summary' => [
+                    'total' => 0,
+                    'valid' => 0,
+                    'errors' => 1,
+                    'created' => 0,
+                    'updated' => 0,
+                    'failed' => 1,
+                ],
+                'rows' => [
+                    [
+                        'line' => 0,
+                        'employee_code' => null,
+                        'period' => null,
+                        'status' => 'error',
+                        'errors' => [$e->getMessage()],
+                    ],
+                ],
+            ];
+        }
+
+        if ($request->expectsJson()) {
+            return response()->json($report, $report['valid'] ? 200 : 422);
+        }
+
+        return back()->with('importReport', $report);
     }
 
     /**
@@ -66,47 +158,73 @@ class PayrollImportController extends Controller
      */
     public function commit(Request $request)
     {
-        $report = $request->session()->get('report');
+        $request->validate([
+            'file' => ['required', 'file', 'mimes:xlsx,xls,csv', 'max:10240'],
+        ]);
 
-        if (! $report || ($report['errors'] ?? 1) > 0 || empty($report['rows'])) {
-            return redirect()->route('payroll.import')
-                ->with('error', 'Run a dry-run validation with zero errors before committing.');
-        }
-
-        $committed = 0;
-
-        foreach ($report['rows'] as $row) {
-            if ($row['status'] !== 'valid') {
-                continue;
-            }
-
-            $employee = Employee::where('employee_code', $row['data']['employee_code'])->first();
-
-            if (! $employee) {
-                continue;
-            }
-
-            PayrollInput::updateOrCreate(
-                ['employee_id' => $employee->id, 'period' => $row['data']['period']],
-                [
-                    'total_working_days' => $row['data']['total_working_days'],
-                    'attended_days' => $row['data']['attended_days'],
-                    'unpaid_leave_days' => $row['data']['unpaid_leave_days'],
-                    'paid_leave_days' => $row['data']['paid_leave_days'],
-                    'overtime_hours' => $row['data']['overtime_hours'],
-                    'late_count' => $row['data']['late_count'],
-                    'source' => 'csv',
-                ],
+        try {
+            $report = app(MonthlyPayrollImportService::class)->process(
+                $request->file('file'),
+                dryRun: false
             );
-
-            $committed++;
+        } catch (\Throwable $e) {
+            $report = [
+                'valid' => false,
+                'dry_run' => false,
+                'summary' => [
+                    'total' => 0,
+                    'valid' => 0,
+                    'errors' => 1,
+                    'created' => 0,
+                    'updated' => 0,
+                    'failed' => 1,
+                ],
+                'rows' => [
+                    [
+                        'line' => 0,
+                        'employee_code' => null,
+                        'period' => null,
+                        'status' => 'error',
+                        'errors' => [$e->getMessage()],
+                    ],
+                ],
+            ];
         }
 
-        // Report consumed — commit button locks again until next dry-run
-        $request->session()->forget('report');
+        if (! ($report['committed'] ?? false)) {
+            if ($request->expectsJson()) {
+                return response()->json($report, 422);
+            }
 
-        return redirect()->route('payroll.import')
-            ->with('success', "Committed {$committed} row(s) successfully. Payroll inputs are ready for Phase 5.");
+            return back()
+                ->with('importReport', $report)
+                ->withErrors(['file' => 'Import failed because validation errors exist.']);
+        }
+
+        if (class_exists(\App\Models\AuditLog::class) && method_exists(\App\Models\AuditLog::class, 'record')) {
+            \App\Models\AuditLog::record(
+                'payroll_input.bulk_import_committed',
+                'BULK-PAYROLL-' . now()->format('YmdHis'),
+                sprintf(
+                    'Monthly payroll import completed. Created: %d, Updated: %d',
+                    $report['summary']['created'] ?? 0,
+                    $report['summary']['updated'] ?? 0
+                )
+            );
+        }
+
+        if ($request->expectsJson()) {
+            return response()->json($report);
+        }
+
+        return back()->with(
+            'success',
+            sprintf(
+                'Monthly payroll import completed. Created: %d, Updated: %d',
+                $report['summary']['created'] ?? 0,
+                $report['summary']['updated'] ?? 0
+            )
+        );
     }
 
     /**

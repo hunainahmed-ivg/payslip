@@ -55,6 +55,15 @@ const props = withDefaults(
 );
 
 const fileName = ref<string | null>(null);
+const syncPeriod = ref(new Date().toISOString().slice(0, 7));
+const syncLoading = ref(false);
+const syncResult = ref<{
+    period: string;
+    api_records: number;
+    csv_records: number;
+    last_event: { status: string; records_total: number | null; created_at: string } | null;
+} | null>(null);
+const syncError = ref<string | null>(null);
 
 const form = useForm({
     file: null as File | null,
@@ -66,7 +75,6 @@ const onFileChange = (event: Event) => {
     fileName.value = file?.name ?? null;
 };
 
-// Commit unlocks ONLY when a clean report exists
 const canCommit = computed(
     () => !!props.report && props.report.errors === 0 && props.report.total > 0,
 );
@@ -83,6 +91,29 @@ const commit = () => {
         preserveScroll: true,
     });
 };
+
+const checkSyncStatus = async () => {
+    syncLoading.value = true;
+    syncError.value = null;
+    try {
+        const response = await fetch(
+            route('payroll.sync-status') + '?period=' + encodeURIComponent(syncPeriod.value),
+            {
+                headers: {
+                    Accept: 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                credentials: 'same-origin',
+            },
+        );
+        if (!response.ok) throw new Error('Unable to load VirtuoHR sync status.');
+        syncResult.value = await response.json();
+    } catch (e) {
+        syncError.value = e instanceof Error ? e.message : 'Unable to load sync status.';
+    } finally {
+        syncLoading.value = false;
+    }
+};
 </script>
 
 <template>
@@ -93,13 +124,13 @@ const commit = () => {
             <div class="flex flex-wrap items-center justify-between gap-4">
                 <div>
                     <h1>Payroll Data Import</h1>
-                    <p>Standardized CSV import with dry-run validation — nothing is written to the database until you commit a clean report.</p>
+                    <p>Upload monthly variable data (attendance, leave, overtime, bonus), or check VirtuoHR sync status for a period. Base salaries stay on employee profiles.</p>
                 </div>
                 <a
                     :href="route('payroll.import.template')"
                     class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-widest text-gray-700 shadow-sm hover:bg-gray-50"
                 >
-                    ↓ Download CSV Template
+                    Download Excel Template
                 </a>
             </div>
         </template>
@@ -108,10 +139,40 @@ const commit = () => {
             <div v-if="success" class="mb-4 rounded-md bg-green-50 p-4 text-sm text-green-700">{{ success }}</div>
             <div v-if="error" class="mb-4 rounded-md bg-red-50 p-4 text-sm text-red-700">{{ error }}</div>
 
+            <div class="card mb-6">
+                <h2 class="mb-2 text-sm font-semibold text-gray-900">VirtuoHR Sync Status</h2>
+                <p class="mb-4 text-sm text-gray-600">
+                    If VirtuoHR is integrated, attendance is pushed automatically. Select a period to confirm received records before generating draft payroll.
+                </p>
+                <div class="flex flex-wrap items-end gap-3">
+                    <div>
+                        <label class="mb-1 block text-xs uppercase tracking-wider text-gray-500">Period</label>
+                        <input
+                            v-model="syncPeriod"
+                            type="month"
+                            class="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                        />
+                    </div>
+                    <PrimaryButton type="button" :disabled="syncLoading" @click="checkSyncStatus">
+                        {{ syncLoading ? 'Checking…' : 'Check VirtuoHR Sync Status' }}
+                    </PrimaryButton>
+                </div>
+                <div v-if="syncError" class="mt-3 text-sm text-red-600">{{ syncError }}</div>
+                <div v-if="syncResult" class="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
+                    Period <strong>{{ syncResult.period }}</strong> —
+                    API records: <strong>{{ syncResult.api_records }}</strong>,
+                    CSV records: <strong>{{ syncResult.csv_records }}</strong>
+                    <span v-if="syncResult.last_event">
+                        · Last webhook {{ syncResult.last_event.status }}
+                        ({{ new Date(syncResult.last_event.created_at).toLocaleString() }})
+                    </span>
+                </div>
+            </div>
+
             <!-- Upload + actions -->
             <div class="card mb-6">
                 <div class="mb-4 flex items-center justify-between">
-                    <h2 class="text-sm font-semibold text-gray-900">Step 1 — Upload attendance & leave file</h2>
+                    <h2 class="text-sm font-semibold text-gray-900">Step 1 — Upload monthly variable file</h2>
                     <span class="badge">{{ employeeCount }} active employees</span>
                 </div>
 
@@ -123,7 +184,7 @@ const commit = () => {
                     <span class="text-xs text-gray-500">
                         Columns: employee_code, period, total_working_days, attended_days, unpaid_leave_days, paid_leave_days, overtime_hours, late_count
                     </span>
-                    <input type="file" accept=".csv,text/csv" class="hidden" @change="onFileChange" />
+                    <input type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="onFileChange" />
                 </label>
                 <InputError :message="form.errors.file" class="mt-2" />
 

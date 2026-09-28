@@ -2,41 +2,51 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\CompanyProfile;
+use App\Models\StampedCopyRequest;
+use App\Support\CurrentCompany;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
 class HandleInertiaRequests extends Middleware
 {
-    /**
-     * The root template that is loaded on the first page visit.
-     *
-     * @var string
-     */
     protected $rootView = 'app';
 
-    /**
-     * Determine the current asset version.
-     */
     public function version(Request $request): ?string
     {
         return parent::version($request);
     }
 
-    /**
-     * Define the props that are shared by default.
-     *
-     * @return array<string, mixed>
-     */
     public function share(Request $request): array
     {
+        $user = $request->user();
+        $current = $user?->isAdmin() ? CurrentCompany::profile() : null;
+
         return [
             ...parent::share($request),
             'auth' => [
-                'user' => $request->user(),
+                'user' => $user ? [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'role' => $user->role ?? 'admin',
+                    'is_admin' => $user->isAdmin(),
+                ] : null,
             ],
-            // 👇 Pending stamped-copy requests count (HR notification badge)
-            'pendingStampedCount' => fn () => $request->user()
-                ? \App\Models\StampedCopyRequest::where('status', 'pending')->count()
+            'companyName' => fn () => $current?->company_name
+                ?: (CompanyProfile::query()->value('company_name') ?: 'Payslip Engine'),
+            'currentCompany' => fn () => $current ? [
+                'id' => $current->id,
+                'company_name' => $current->company_name,
+            ] : null,
+            'companies' => fn () => ($user && $user->isAdmin())
+                ? CompanyProfile::query()
+                    ->where('is_active', true)
+                    ->orderBy('company_name')
+                    ->get(['id', 'company_name'])
+                : [],
+            'pendingStampedCount' => fn () => ($user && $user->isAdmin())
+                ? StampedCopyRequest::where('status', 'pending')->count()
                 : 0,
         ];
     }

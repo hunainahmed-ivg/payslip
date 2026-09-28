@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class PayrollRun extends Model
 {
     protected $fillable = [
-        'period', 'status', 'total_earnings', 'total_deductions', 'total_net_pay',
+        'company_id', 'period', 'status', 'total_earnings', 'total_deductions', 'total_net_pay',
         'generated_by', 'generated_at', 'approved_at',
     ];
 
@@ -30,6 +30,11 @@ class PayrollRun extends Model
     public function generator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'generated_by');
+    }
+
+    public function company(): BelongsTo
+    {
+        return $this->belongsTo(CompanyProfile::class, 'company_id');
     }
 
     protected static function booted(): void

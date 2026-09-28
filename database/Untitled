@@ -1,0 +1,2 @@
+New-Item -ItemType Directory -Force -Path scripts
+Move-Item fix-payslip-pdfs.php scripts\regenerate-payslip-pdfs.php

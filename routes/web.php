@@ -8,7 +8,9 @@ use App\Http\Controllers\EmployeeSalaryComponentController;
 use App\Http\Controllers\PayrollRunController;
 use App\Http\Controllers\PayrollImportController;
 use App\Http\Controllers\EmployeeController;
+use App\Http\Controllers\EmployeeBulkImportController;
 use App\Http\Controllers\Portal\PayslipPortalController;
+use App\Http\Controllers\PayslipAccessController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\IntegrationController;
 use App\Http\Controllers\AuditLogController;
@@ -30,7 +32,19 @@ Route::get('/dashboard', function () {
     return Inertia::render('Dashboard');
 })->middleware(['auth', 'verified'])->name('dashboard');
 
+Route::get('/payslips/{payslip}/view', [PayslipAccessController::class, 'viewPayslip'])->name('payslips.view');
+Route::get('/portal/payslips', [PayslipPortalController::class, 'index'])->name('portal.payslips');
+
 Route::middleware('auth')->group(function () {
+
+    Route::get('/payslips/{payslip}/download', [PayslipAccessController::class, 'downloadPayslip'])
+        ->name('payslips.download');
+
+    Route::get('/stamped-requests/{stampedRequest}/view', [PayslipAccessController::class, 'viewStampedCopy'])
+        ->name('stamped-requests.view');
+
+    Route::get('/stamped-requests/{stampedRequest}/download', [PayslipAccessController::class, 'downloadStampedCopy'])
+        ->name('stamped-requests.download');
 
     // Inside Route::middleware('auth')->group(...):
     Route::get('/settings/security-audit', [AuditLogController::class, 'index'])->name('settings.security-audit');
@@ -62,7 +76,19 @@ Route::middleware('auth')->group(function () {
     Route::put('/settings/salary-components/{component}', [SalaryComponentController::class, 'update'])->name('settings.salary-components.update');
     Route::delete('/settings/salary-components/{component}', [SalaryComponentController::class, 'destroy'])->name('settings.salary-components.destroy');
 
-    Route::get('/portal/payslips', [PayslipPortalController::class, 'index'])->name('portal.payslips');
+    Route::get('/portal/payslips/{payslip}/view', [PayslipAccessController::class, 'viewPayslip'])
+        ->name('portal.payslips.view');
+
+    Route::get('/portal/payslips/{payslip}/download', [PayslipAccessController::class, 'downloadPayslip'])
+        ->name('portal.payslips.download');
+
+    Route::get('/portal/stamped-requests/{stampedRequest}/view', [PayslipAccessController::class, 'viewStampedCopy'])
+        ->name('portal.stamped-requests.view');
+
+    Route::get('/portal/stamped-requests/{stampedRequest}/download', [PayslipAccessController::class, 'downloadStampedCopy'])
+        ->name('portal.stamped-requests.download');
+    
+    Route::resource('employees', EmployeeController::class);
 
     Route::prefix('employees')->name('employees.')->group(function () {
         Route::get('/', [EmployeeController::class, 'index'])->name('index');
@@ -74,6 +100,19 @@ Route::middleware('auth')->group(function () {
         Route::post('/{employee}/salary-components', [EmployeeSalaryComponentController::class, 'store'])->name('salary-components.store');
         Route::put('/{employee}/salary-components/{override}', [EmployeeSalaryComponentController::class, 'update'])->name('salary-components.update');
         Route::delete('/{employee}/salary-components/{override}', [EmployeeSalaryComponentController::class, 'destroy'])->name('salary-components.destroy');
+
+        Route::get('/employees/bulk-import/template', [EmployeeBulkImportController::class, 'template'])->name('employees.bulk-import.template');
+                Route::get('/bulk-import', [EmployeeBulkImportController::class, 'index'])
+            ->name('employees.bulk-import');
+
+        Route::get('/bulk-import/template', [EmployeeBulkImportController::class, 'template'])
+            ->name('employees.bulk-import.template');
+
+        Route::post('/bulk-import/dry-run', [EmployeeBulkImportController::class, 'dryRun'])
+            ->name('employees.bulk-import.dry-run');
+
+        Route::post('/bulk-import/commit', [EmployeeBulkImportController::class, 'commit'])
+            ->name('employees.bulk-import.commit');
     });
 
     Route::prefix('payroll')->name('payroll.')->group(function () {

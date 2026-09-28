@@ -16,7 +16,8 @@ interface Payslip {
     total_deductions: number;
     net_pay: number;
     published_at: string;
-    pdf_url: string;
+    pdf_url: string | null;
+    pdf_download_url?: string | null;
 }
 
 interface StampedRequest {
@@ -29,6 +30,7 @@ interface StampedRequest {
     reviewed_at: string | null;
     review_note: string | null;
     stamped_pdf_url: string | null;
+    stamped_pdf_download_url?: string | null;
     created_at: string;
     payslip: { id: number; period: string } | null;
 }
@@ -145,27 +147,42 @@ const submitRequest = () => {
                         </div>
 
                         <div class="mt-6 space-y-2">
-                            <a
-                                :href="payslip.pdf_url"
-                                target="_blank"
-                                class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500"
-                            >
-                                ⬇ Download Payslip PDF
-                            </a>
-                            <button
-                                v-if="pendingPayslipIds.includes(payslip.id)"
-                                disabled
-                                class="w-full rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-700"
-                            >
-                                ⏳ Stamped Request Pending…
-                            </button>
-                            <button
-                                v-else
-                                class="w-full rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:border-indigo-300 hover:bg-indigo-50"
-                                @click="openRequest(payslip)"
-                            >
-                                🖋 Request Official Stamped Copy
-                            </button>
+                            <div class="mt-6 space-y-2">
+                                <div class="flex gap-2">
+                                    <a
+                                        v-if="payslip.pdf_url"
+                                        :href="payslip.pdf_url"
+                                        target="_blank"
+                                        rel="noopener"
+                                        class="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50"
+                                    >
+                                        👁 View Payslip
+                                    </a>
+
+                                    <a
+                                        v-if="payslip.pdf_download_url"
+                                        :href="payslip.pdf_download_url"
+                                        class="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500"
+                                    >
+                                        ⬇ Download PDF
+                                    </a>
+                                </div>
+
+                                <button
+                                    v-if="pendingPayslipIds.includes(payslip.id)"
+                                    disabled
+                                    class="w-full rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-700"
+                                >
+                                    ⏳ Stamped Request Pending…
+                                </button>
+                                <button
+                                    v-else
+                                    class="w-full rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:border-indigo-300 hover:bg-indigo-50"
+                                    @click="openRequest(payslip)"
+                                >
+                                    🖋 Request Official Stamped Copy
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -212,16 +229,36 @@ const submitRequest = () => {
                                     </div>
                                 </td>
                                 <td class="px-6 py-4 text-right">
-                                    <a
-                                        v-if="req.status === 'approved' && req.stamped_pdf_url"
-                                        :href="req.stamped_pdf_url"
-                                        target="_blank"
-                                        class="text-sm font-medium text-indigo-600 hover:text-indigo-800"
+                                    <div
+                                        v-if="req.status === 'approved' && (req.stamped_pdf_url || req.stamped_pdf_download_url)"
+                                        class="flex justify-end gap-2"
                                     >
-                                        ⬇ Stamped PDF
-                                    </a>
-                                    <span v-else-if="req.status === 'approved'" class="text-xs text-gray-400">Generating…</span>
-                                    <span v-else class="text-xs text-gray-400">Awaiting HR review</span>
+                                        <a
+                                            v-if="req.stamped_pdf_url"
+                                            :href="req.stamped_pdf_url"
+                                            target="_blank"
+                                            rel="noopener"
+                                            class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
+                                        >
+                                            View
+                                        </a>
+
+                                        <a
+                                            v-if="req.stamped_pdf_download_url"
+                                            :href="req.stamped_pdf_download_url"
+                                            class="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-500"
+                                        >
+                                            Download
+                                        </a>
+                                    </div>
+
+                                    <span v-else-if="req.status === 'approved'" class="text-xs text-gray-400">
+                                        Generating…
+                                    </span>
+
+                                    <span v-else class="text-xs text-gray-400">
+                                        Awaiting HR review
+                                    </span>
                                 </td>
                             </tr>
                             <tr v-if="!requests.length">

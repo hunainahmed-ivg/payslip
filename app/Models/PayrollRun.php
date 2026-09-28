@@ -21,6 +21,7 @@ class PayrollRun extends Model
         'approved_at' => 'datetime',
     ];
 
+    
     public function items(): HasMany
     {
         return $this->hasMany(PayrollRunItem::class);
@@ -29,5 +30,50 @@ class PayrollRun extends Model
     public function generator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'generated_by');
+    }
+
+    protected static function booted(): void
+    {
+        static::updating(function (self $run) {
+            $originalStatus = $run->getOriginal('status');
+
+            $protectedStatuses = [
+                'approved',
+                'locked',
+                'published',
+            ];
+
+            if (! in_array($originalStatus, $protectedStatuses, true)) {
+                return;
+            }
+
+            $dirtyFields = collect($run->getDirty())
+                ->keys()
+                ->reject(function ($key) {
+                    return in_array($key, ['status', 'updated_at'], true);
+                })
+                ->values();
+
+            if ($dirtyFields->isNotEmpty()) {
+                throw new \RuntimeException(
+                    'Approved payroll runs cannot be edited. Attempted fields: '
+                    . $dirtyFields->implode(', ')
+                );
+            }
+
+            if ($run->status !== $originalStatus) {
+                $allowedNextStatuses = match ($originalStatus) {
+                    'approved' => ['locked', 'published'],
+                    'locked' => ['published'],
+                    default => [],
+                };
+
+                if (! in_array($run->status, $allowedNextStatuses, true)) {
+                    throw new \RuntimeException(
+                        "Cannot change payroll run status from {$originalStatus} to {$run->status}."
+                    );
+                }
+            }
+        });
     }
 }

@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Storage;
 
 class StampedCopyRequest extends Model
 {
-    protected $appends = ['stamped_pdf_url', 'reason_label'];
+    protected $appends = ['stamped_pdf_url', 'stamped_pdf_download_url', 'reason_label'];
     
     protected $fillable = [
         'payslip_id', 'employee_id', 'reason', 'reason_note',
@@ -37,9 +37,21 @@ class StampedCopyRequest extends Model
 
     public function getStampedPdfUrlAttribute(): ?string
     {
-        return $this->stamped_pdf_path ? Storage::url($this->stamped_pdf_path) : null;
+        if (! $this->stamped_pdf_path || $this->status !== 'approved') {
+            return null;
+        }
+
+        return route('portal.stamped-requests.view', $this);
     }
 
+    public function getStampedPdfDownloadUrlAttribute(): ?string
+    {
+        if (! $this->stamped_pdf_path || $this->status !== 'approved') {
+            return null;
+        }
+
+        return route('portal.stamped-requests.download', $this);
+    }
     public function getReasonLabelAttribute(): string
     {
         return match ($this->reason) {

@@ -71,6 +71,32 @@ class PayrollSyncController extends Controller
         ], 200);
     }
 }
+===== FILE: payslip/app/Http/Controllers/AuditLogController.php =====
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\AuditLog;
+use Inertia\Inertia;
+use Inertia\Response;
+
+class AuditLogController extends Controller
+{
+    public function index(): Response
+    {
+        return Inertia::render('Security/Audit', [
+            'logs' => AuditLog::with('user')->latest()->limit(200)->get(),
+            'environment' => [
+                'app_env' => config('app.env'),
+                'app_debug' => (bool) config('app.debug'),
+                'session_driver' => config('session.driver'),
+                'queue_connection' => config('queue.default'),
+                'mail_mailer' => config('mail.default'),
+                'db_connection' => config('database.default'),
+            ],
+        ]);
+    }
+}
 ===== FILE: payslip/app/Http/Controllers/Auth/AuthenticatedSessionController.php =====
 <?php
 
@@ -502,13 +528,13 @@ class EmployeeController extends Controller
         ]);
     }
 
-    public function store(Request $request, Employee $employee): RedirectResponse
+    public function store(Request $request): RedirectResponse
     {
         $validated = $this->validateEmployee($request);
-        
+
         Employee::create($validated);
 
-        return redirect()->route('employees.show', $employee)->with('success', 'Employee created successfully');
+        return redirect()->route('employees.index')->with('success', 'Employee created successfully.');
     }
 
     public function update(Request $request, Employee $employee): RedirectResponse
@@ -615,6 +641,37 @@ class EmployeeSalaryComponentController extends Controller
             'type' => ['required', Rule::in(['earning', 'deduction'])],
             'calculation_type' => ['required', Rule::in(['fixed', 'percentage', 'statutory'])],
             'value' => ['required', 'numeric', 'min:0', 'max:999999999'],
+        ]);
+    }
+}
+===== FILE: payslip/app/Http/Controllers/IntegrationController.php =====
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\PayrollInput;
+use Inertia\Inertia;
+use Inertia\Response;
+
+class IntegrationController extends Controller
+{
+    public function index(): Response
+    {
+        $token = (string) config('services.virtuohr.token', '');
+
+        return Inertia::render('Integrations/Index', [
+            'webhookUrl' => url('/api/v1/payroll/sync'),
+            'tokenConfigured' => $token !== '',
+            'tokenMasked' => $token !== ''
+                ? substr($token, 0, 6).str_repeat('•', 12)
+                : 'Not configured (.env: VIRTUOHR_API_TOKEN)',
+            'apiSyncCount' => PayrollInput::where('source', 'api')->count(),
+            'csvSyncCount' => PayrollInput::where('source', 'csv')->count(),
+            'recentApiSyncs' => PayrollInput::with('employee')
+                ->where('source', 'api')
+                ->latest('updated_at')
+                ->limit(10)
+                ->get(),
         ]);
     }
 }
@@ -864,12 +921,13 @@ class PayrollImportController extends Controller
 
 namespace App\Http\Controllers;
 
+use App\Jobs\GeneratePayslipPdf;
+use App\Models\AuditLog;
 use App\Models\Employee;
 use App\Models\PayrollRun;
 use App\Models\PayrollRunItem;
-use App\Services\PayrollCalculationEngine;
-use App\Jobs\GeneratePayslipPdf;
 use App\Models\Payslip;
+use App\Services\PayrollCalculationEngine;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -921,6 +979,9 @@ class PayrollRunController extends Controller
 
         $this->refreshTotals($run);
 
+        // 🔐 AUDIT LOG
+        AuditLog::record('payroll_run.created', "Payroll {$validated['period']}", "Draft generated for {$employees->count()} employees.");
+
         return redirect()->route('payroll-runs.show', $run)
             ->with('success', "Draft payroll for {$validated['period']} generated for {$employees->count()} employees.");
     }
@@ -936,7 +997,7 @@ class PayrollRunController extends Controller
     }
 
     /**
-     * HR line-item override (e.g. unpaid leave 5 days → 3 days) + instant recalculation.
+     * HR line-item override + instant recalculation.
      */
     public function updateItem(Request $request, PayrollRun $payrollRun, PayrollRunItem $item): RedirectResponse
     {
@@ -968,7 +1029,7 @@ class PayrollRunController extends Controller
     }
 
     /**
-     * Approve & freeze the snapshot (Phase 6 distribution will use this).
+     * Approve & freeze the snapshot.
      */
     public function approve(PayrollRun $payrollRun): RedirectResponse
     {
@@ -980,6 +1041,9 @@ class PayrollRunController extends Controller
             'status' => 'approved',
             'approved_at' => now(),
         ]);
+
+        // 🔐 AUDIT LOG
+        AuditLog::record('payroll_run.approved', "Payroll {$payrollRun->period}", 'Snapshot frozen & locked.');
 
         return back()->with('success', "Payroll {$payrollRun->period} approved & frozen. Snapshot locked.");
     }
@@ -1003,48 +1067,51 @@ class PayrollRunController extends Controller
         ]);
     }
 
-        /**
+    /**
      * Batch auto-publish: freeze snapshots into payslips + queue PDF generation.
      */
-        public function publish(PayrollRun $payrollRun): RedirectResponse
-        {
-            abort_if($payrollRun->status !== 'approved', 403, 'Only approved runs can be published.');
-    
-            $payrollRun->load('items.employee.branch');
-    
-            foreach ($payrollRun->items as $item) {
-                $snapshot = [
-                    'period' => $payrollRun->period,
-                    'employee' => [
-                        'name' => $item->employee->full_name,
-                        'code' => $item->employee->employee_code,
-                        'department' => $item->employee->department,
-                        'designation' => $item->employee->designation,
-                        'branch' => $item->employee->branch?->name,
-                    ],
-                    'base_salary' => $item->base_salary,
-                    'currency_code' => $item->currency_code,
-                    'earnings' => $item->earnings,
-                    'deductions' => $item->deductions,
-                    'gross_pay' => $item->gross_pay,
-                    'total_deductions' => $item->total_deductions,
-                    'net_pay' => $item->net_pay,
-                ];
-    
-                $payslip = Payslip::updateOrCreate(
-                    ['employee_id' => $item->employee_id, 'period' => $payrollRun->period],
-                    [
-                        'payroll_run_id' => $payrollRun->id,
-                        'snapshot' => $snapshot,
-                        'status' => 'queued',
-                    ],
-                );
-    
-                GeneratePayslipPdf::dispatch($payslip);
-            }
-    
-            return back()->with('success', count($payrollRun->items).' payslips queued for PDF generation & auto-publishing.');
+    public function publish(PayrollRun $payrollRun): RedirectResponse
+    {
+        abort_if($payrollRun->status !== 'approved', 403, 'Only approved runs can be published.');
+
+        $payrollRun->load('items.employee.branch');
+
+        foreach ($payrollRun->items as $item) {
+            $snapshot = [
+                'period' => $payrollRun->period,
+                'employee' => [
+                    'name' => $item->employee->full_name,
+                    'code' => $item->employee->employee_code,
+                    'department' => $item->employee->department,
+                    'designation' => $item->employee->designation,
+                    'branch' => $item->employee->branch?->name,
+                ],
+                'base_salary' => $item->base_salary,
+                'currency_code' => $item->currency_code,
+                'earnings' => $item->earnings,
+                'deductions' => $item->deductions,
+                'gross_pay' => $item->gross_pay,
+                'total_deductions' => $item->total_deductions,
+                'net_pay' => $item->net_pay,
+            ];
+
+            $payslip = Payslip::updateOrCreate(
+                ['employee_id' => $item->employee_id, 'period' => $payrollRun->period],
+                [
+                    'payroll_run_id' => $payrollRun->id,
+                    'snapshot' => $snapshot,
+                    'status' => 'queued',
+                ],
+            );
+
+            GeneratePayslipPdf::dispatch($payslip);
         }
+
+        // 🔐 AUDIT LOG
+        AuditLog::record('payroll_run.published', "Payroll {$payrollRun->period}", count($payrollRun->items).' payslips queued for PDF generation.');
+
+        return back()->with('success', count($payrollRun->items).' payslips queued for PDF generation & auto-publishing.');
+    }
 }
 ===== FILE: payslip/app/Http/Controllers/Portal/PayslipPortalController.php =====
 <?php
@@ -1170,6 +1237,59 @@ class ProfileController extends Controller
     }
 }
 
+===== FILE: payslip/app/Http/Controllers/ReportController.php =====
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Branch;
+use App\Models\Employee;
+use App\Models\PayrollRun;
+use App\Models\PayrollRunItem;
+use App\Models\Payslip;
+use App\Models\StampedCopyRequest;
+use Inertia\Inertia;
+use Inertia\Response;
+
+class ReportController extends Controller
+{
+    public function index(): Response
+    {
+        $latestRun = PayrollRun::where('status', '!=', 'draft')
+            ->orderByDesc('period')
+            ->first();
+
+        $currencyBreakdown = [];
+
+        if ($latestRun) {
+            $currencyBreakdown = PayrollRunItem::where('payroll_run_id', $latestRun->id)
+                ->get()
+                ->groupBy('currency_code')
+                ->map(fn ($items, $code) => [
+                    'currency_code' => $code,
+                    'employees' => $items->count(),
+                    'gross_pay' => round((float) $items->sum('gross_pay'), 2),
+                    'total_deductions' => round((float) $items->sum('total_deductions'), 2),
+                    'net_pay' => round((float) $items->sum('net_pay'), 2),
+                ])
+                ->values()
+                ->all();
+        }
+
+        return Inertia::render('Reports/Index', [
+            'stats' => [
+                'active_employees' => Employee::where('is_active', true)->count(),
+                'branches' => Branch::count(),
+                'payroll_runs' => PayrollRun::count(),
+                'published_payslips' => Payslip::where('status', 'published')->count(),
+                'pending_requests' => StampedCopyRequest::where('status', 'pending')->count(),
+            ],
+            'runs' => PayrollRun::withCount('items')->orderByDesc('period')->get(),
+            'latestRun' => $latestRun,
+            'currencyBreakdown' => $currencyBreakdown,
+        ]);
+    }
+}
 ===== FILE: payslip/app/Http/Controllers/Settings/CompanyProfileController.php =====
 <?php
 
@@ -1177,6 +1297,7 @@ namespace App\Http\Controllers\Settings;
 
 use App\Http\Controllers\Controller;
 use App\Models\CompanyProfile;
+use App\Models\AuditLog;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -1241,9 +1362,29 @@ class CompanyProfileController extends Controller
         unset($validated['header_image'], $validated['footer_image'], $validated['remove_header'], $validated['remove_footer']);
 
         $profile->update($validated);
+        AuditLog::record('settings.visual_identity_updated', 'Company Branding', 'Letterhead, template or brand tokens changed.');
 
         return back()->with('success', 'Configuration saved successfully.');
     }
+        /**
+     * Read-only company profile overview.
+     */
+        public function show(): Response
+        {
+            return Inertia::render('Settings/CompanyProfile', [
+                'profile' => CompanyProfile::firstOrCreate([]),
+            ]);
+        }
+    
+        /**
+         * Payslip templates showcase (active template highlighted).
+         */
+        public function templates(): Response
+        {
+            return Inertia::render('Settings/PayslipTemplates', [
+                'profile' => CompanyProfile::firstOrCreate([]),
+            ]);
+        }
 }
 ===== FILE: payslip/app/Http/Controllers/Settings/SalaryComponentController.php =====
 <?php
@@ -1312,7 +1453,7 @@ class SalaryComponentController extends Controller
 
     public function uniqueSlug(string $name, ?int $ignoreId = null): string
     {
-        $base = Str::slug($name);
+        $base = Str::slug($name, '_');
         $slug = $base;
         $i = 2;
 
@@ -1320,7 +1461,7 @@ class SalaryComponentController extends Controller
             SalaryComponent::where('slug', $slug)->when($ignoreId, fn($q) => $q->where('id', '!=', $ignoreId))
             ->exists()
         ){
-            $slug = $base . '-' . $i++;
+            $slug = $base . '_' . $i++;
         }
         return $slug;
     }
@@ -1334,6 +1475,7 @@ namespace App\Http\Controllers;
 use App\Jobs\GenerateStampedPdf;
 use App\Models\Payslip;
 use App\Models\StampedCopyRequest;
+use App\Models\AuditLog;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -1371,6 +1513,10 @@ class StampedCopyRequestController extends Controller
             'reviewed_by' => $request->user()->id,
             'reviewed_at' => now(),
         ]);
+        // 🔐 AUDIT LOG
+        AuditLog::record('stamped_request.approved', 'REQ-'.str_pad((string) 
+        $stampedCopyRequest->id, 5, '0', STR_PAD_LEFT), 
+        $stampedCopyRequest->reason_label.' — '.$stampedCopyRequest->employee?->full_name);
 
         GenerateStampedPdf::dispatch($stampedCopyRequest);
 
@@ -1394,6 +1540,9 @@ class StampedCopyRequestController extends Controller
             'reviewed_at' => now(),
             'review_note' => $validated['review_note'],
         ]);
+
+        AuditLog::record('stamped_request.rejected', 'REQ-'.str_pad((string) 
+        $stampedCopyRequest->id, 5, '0', STR_PAD_LEFT), $stampedCopyRequest->reason_label.' — '.$stampedCopyRequest->employee?->full_name);
 
         return back()->with('success', 'Request rejected with note.');
     }
@@ -1652,6 +1801,37 @@ class GenerateStampedPdf implements ShouldQueue
     public function handle(PayslipPdfService $service): void
     {
         $service->generateStamped($this->stampedRequest);
+    }
+}
+===== FILE: payslip/app/Models/AuditLog.php =====
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+class AuditLog extends Model
+{
+    protected $fillable = ['user_id', 'action', 'subject', 'description', 'ip_address'];
+
+    /**
+     * One-liner audit recording helper.
+     */
+    public static function record(string $action, ?string $subject = null, ?string $description = null): void
+    {
+        static::create([
+            'user_id' => auth()->id(),
+            'action' => $action,
+            'subject' => $subject,
+            'description' => $description,
+            'ip_address' => request()->ip(),
+        ]);
+    }
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
     }
 }
 ===== FILE: payslip/app/Models/Branch.php =====
@@ -2390,403 +2570,6 @@ return Application::configure(basePath: dirname(__DIR__))
 *
 !.gitignore
 
-===== FILE: payslip/bootstrap/cache/packages.php =====
-<?php return array (
-  'barryvdh/laravel-dompdf' => 
-  array (
-    'aliases' => 
-    array (
-      'PDF' => 'Barryvdh\\DomPDF\\Facade\\Pdf',
-      'Pdf' => 'Barryvdh\\DomPDF\\Facade\\Pdf',
-    ),
-    'providers' => 
-    array (
-      0 => 'Barryvdh\\DomPDF\\ServiceProvider',
-    ),
-  ),
-  'inertiajs/inertia-laravel' => 
-  array (
-    'providers' => 
-    array (
-      0 => 'Inertia\\ServiceProvider',
-    ),
-  ),
-  'laravel/boost' => 
-  array (
-    'providers' => 
-    array (
-      0 => 'Laravel\\Boost\\BoostServiceProvider',
-    ),
-  ),
-  'laravel/breeze' => 
-  array (
-    'providers' => 
-    array (
-      0 => 'Laravel\\Breeze\\BreezeServiceProvider',
-    ),
-  ),
-  'laravel/mcp' => 
-  array (
-    'aliases' => 
-    array (
-      'Mcp' => 'Laravel\\Mcp\\Facades\\Mcp',
-    ),
-    'providers' => 
-    array (
-      0 => 'Laravel\\Mcp\\Server\\McpServiceProvider',
-    ),
-  ),
-  'laravel/pail' => 
-  array (
-    'providers' => 
-    array (
-      0 => 'Laravel\\Pail\\PailServiceProvider',
-    ),
-  ),
-  'laravel/pao' => 
-  array (
-    'providers' => 
-    array (
-      0 => 'Laravel\\Pao\\Laravel\\ServiceProvider',
-    ),
-  ),
-  'laravel/roster' => 
-  array (
-    'providers' => 
-    array (
-      0 => 'Laravel\\Roster\\RosterServiceProvider',
-    ),
-  ),
-  'laravel/sanctum' => 
-  array (
-    'providers' => 
-    array (
-      0 => 'Laravel\\Sanctum\\SanctumServiceProvider',
-    ),
-  ),
-  'laravel/tinker' => 
-  array (
-    'providers' => 
-    array (
-      0 => 'Laravel\\Tinker\\TinkerServiceProvider',
-    ),
-  ),
-  'nesbot/carbon' => 
-  array (
-    'providers' => 
-    array (
-      0 => 'Carbon\\Laravel\\ServiceProvider',
-    ),
-  ),
-  'nunomaduro/collision' => 
-  array (
-    'providers' => 
-    array (
-      0 => 'NunoMaduro\\Collision\\Adapters\\Laravel\\CollisionServiceProvider',
-    ),
-  ),
-  'nunomaduro/termwind' => 
-  array (
-    'providers' => 
-    array (
-      0 => 'Termwind\\Laravel\\TermwindServiceProvider',
-    ),
-  ),
-  'tightenco/ziggy' => 
-  array (
-    'providers' => 
-    array (
-      0 => 'Tighten\\Ziggy\\ZiggyServiceProvider',
-    ),
-  ),
-);
-===== FILE: payslip/bootstrap/cache/services.php =====
-<?php return array (
-  'providers' => 
-  array (
-    0 => 'Illuminate\\Auth\\AuthServiceProvider',
-    1 => 'Illuminate\\Broadcasting\\BroadcastServiceProvider',
-    2 => 'Illuminate\\Bus\\BusServiceProvider',
-    3 => 'Illuminate\\Cache\\CacheServiceProvider',
-    4 => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    5 => 'Illuminate\\Concurrency\\ConcurrencyServiceProvider',
-    6 => 'Illuminate\\Cookie\\CookieServiceProvider',
-    7 => 'Illuminate\\Database\\DatabaseServiceProvider',
-    8 => 'Illuminate\\Encryption\\EncryptionServiceProvider',
-    9 => 'Illuminate\\Filesystem\\FilesystemServiceProvider',
-    10 => 'Illuminate\\Image\\ImageServiceProvider',
-    11 => 'Illuminate\\Foundation\\Providers\\FoundationServiceProvider',
-    12 => 'Illuminate\\Hashing\\HashServiceProvider',
-    13 => 'Illuminate\\Mail\\MailServiceProvider',
-    14 => 'Illuminate\\Notifications\\NotificationServiceProvider',
-    15 => 'Illuminate\\Pagination\\PaginationServiceProvider',
-    16 => 'Illuminate\\Auth\\Passwords\\PasswordResetServiceProvider',
-    17 => 'Illuminate\\Pipeline\\PipelineServiceProvider',
-    18 => 'Illuminate\\Queue\\QueueServiceProvider',
-    19 => 'Illuminate\\Redis\\RedisServiceProvider',
-    20 => 'Illuminate\\Session\\SessionServiceProvider',
-    21 => 'Illuminate\\Translation\\TranslationServiceProvider',
-    22 => 'Illuminate\\Validation\\ValidationServiceProvider',
-    23 => 'Illuminate\\View\\ViewServiceProvider',
-    24 => 'Barryvdh\\DomPDF\\ServiceProvider',
-    25 => 'Inertia\\ServiceProvider',
-    26 => 'Laravel\\Boost\\BoostServiceProvider',
-    27 => 'Laravel\\Breeze\\BreezeServiceProvider',
-    28 => 'Laravel\\Mcp\\Server\\McpServiceProvider',
-    29 => 'Laravel\\Pail\\PailServiceProvider',
-    30 => 'Laravel\\Pao\\Laravel\\ServiceProvider',
-    31 => 'Laravel\\Roster\\RosterServiceProvider',
-    32 => 'Laravel\\Sanctum\\SanctumServiceProvider',
-    33 => 'Laravel\\Tinker\\TinkerServiceProvider',
-    34 => 'Carbon\\Laravel\\ServiceProvider',
-    35 => 'NunoMaduro\\Collision\\Adapters\\Laravel\\CollisionServiceProvider',
-    36 => 'Termwind\\Laravel\\TermwindServiceProvider',
-    37 => 'Tighten\\Ziggy\\ZiggyServiceProvider',
-    38 => 'App\\Providers\\AppServiceProvider',
-  ),
-  'eager' => 
-  array (
-    0 => 'Illuminate\\Auth\\AuthServiceProvider',
-    1 => 'Illuminate\\Cookie\\CookieServiceProvider',
-    2 => 'Illuminate\\Database\\DatabaseServiceProvider',
-    3 => 'Illuminate\\Encryption\\EncryptionServiceProvider',
-    4 => 'Illuminate\\Filesystem\\FilesystemServiceProvider',
-    5 => 'Illuminate\\Foundation\\Providers\\FoundationServiceProvider',
-    6 => 'Illuminate\\Notifications\\NotificationServiceProvider',
-    7 => 'Illuminate\\Pagination\\PaginationServiceProvider',
-    8 => 'Illuminate\\Session\\SessionServiceProvider',
-    9 => 'Illuminate\\View\\ViewServiceProvider',
-    10 => 'Barryvdh\\DomPDF\\ServiceProvider',
-    11 => 'Inertia\\ServiceProvider',
-    12 => 'Laravel\\Boost\\BoostServiceProvider',
-    13 => 'Laravel\\Mcp\\Server\\McpServiceProvider',
-    14 => 'Laravel\\Pail\\PailServiceProvider',
-    15 => 'Laravel\\Pao\\Laravel\\ServiceProvider',
-    16 => 'Laravel\\Roster\\RosterServiceProvider',
-    17 => 'Laravel\\Sanctum\\SanctumServiceProvider',
-    18 => 'Carbon\\Laravel\\ServiceProvider',
-    19 => 'NunoMaduro\\Collision\\Adapters\\Laravel\\CollisionServiceProvider',
-    20 => 'Termwind\\Laravel\\TermwindServiceProvider',
-    21 => 'Tighten\\Ziggy\\ZiggyServiceProvider',
-    22 => 'App\\Providers\\AppServiceProvider',
-  ),
-  'deferred' => 
-  array (
-    'Illuminate\\Broadcasting\\BroadcastManager' => 'Illuminate\\Broadcasting\\BroadcastServiceProvider',
-    'Illuminate\\Contracts\\Broadcasting\\Factory' => 'Illuminate\\Broadcasting\\BroadcastServiceProvider',
-    'Illuminate\\Contracts\\Broadcasting\\Broadcaster' => 'Illuminate\\Broadcasting\\BroadcastServiceProvider',
-    'Illuminate\\Bus\\Dispatcher' => 'Illuminate\\Bus\\BusServiceProvider',
-    'Illuminate\\Contracts\\Bus\\Dispatcher' => 'Illuminate\\Bus\\BusServiceProvider',
-    'Illuminate\\Contracts\\Bus\\QueueingDispatcher' => 'Illuminate\\Bus\\BusServiceProvider',
-    'Illuminate\\Bus\\BatchRepository' => 'Illuminate\\Bus\\BusServiceProvider',
-    'Illuminate\\Bus\\DatabaseBatchRepository' => 'Illuminate\\Bus\\BusServiceProvider',
-    'cache' => 'Illuminate\\Cache\\CacheServiceProvider',
-    'cache.store' => 'Illuminate\\Cache\\CacheServiceProvider',
-    'cache.psr6' => 'Illuminate\\Cache\\CacheServiceProvider',
-    'memcached.connector' => 'Illuminate\\Cache\\CacheServiceProvider',
-    'Illuminate\\Cache\\RateLimiter' => 'Illuminate\\Cache\\CacheServiceProvider',
-    'Illuminate\\Foundation\\Console\\AboutCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Cache\\Console\\ClearCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Cache\\Console\\ForgetCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ClearCompiledCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Auth\\Console\\ClearResetsCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ConfigCacheCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ConfigClearCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ConfigShowCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\DbCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\MonitorCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\PruneCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\ShowCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\TableCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\WipeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\DownCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\EnvironmentCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\EnvironmentDecryptCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\EnvironmentEncryptCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\EventCacheCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\EventClearCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\EventListCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Concurrency\\Console\\InvokeSerializedClosureCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\KeyGenerateCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\OptimizeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\OptimizeClearCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\PackageDiscoverCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Cache\\Console\\PruneStaleTagsCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\ClearCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\ListFailedCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\FlushFailedCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\ForgetFailedCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\ListenCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\MonitorCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\PauseCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\PruneBatchesCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\PruneFailedJobsCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\RestartCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\ResumeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\RetryCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\RetryBatchCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\WorkCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ReloadCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\RouteCacheCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\RouteClearCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\RouteListCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\DumpCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\Seeds\\SeedCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Console\\Scheduling\\ScheduleFinishCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Console\\Scheduling\\ScheduleListCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Console\\Scheduling\\ScheduleRunCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Console\\Scheduling\\ScheduleClearCacheCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Console\\Scheduling\\ScheduleTestCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Console\\Scheduling\\ScheduleWorkCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Console\\Scheduling\\ScheduleInterruptCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Console\\Scheduling\\SchedulePauseCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Console\\Scheduling\\ScheduleResumeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\ShowModelCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\StorageLinkCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\StorageUnlinkCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\UpCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ViewCacheCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ViewClearCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ApiInstallCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\BroadcastingInstallCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Cache\\Console\\CacheTableCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\CastMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ChannelListCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ChannelMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ClassMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ComponentMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ConfigMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ConfigPublishCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ConsoleMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Routing\\Console\\ControllerMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\DevCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\DevListCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\DocsCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\EnumMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\EventGenerateCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\EventMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ExceptionMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\Factories\\FactoryMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\InterfaceMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\JobMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\JobMiddlewareMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\LangPublishCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ListenerMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\MailMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Routing\\Console\\MiddlewareMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ModelMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\NotificationMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Notifications\\Console\\NotificationTableCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ObserverMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\PolicyMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ProviderMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\FailedTableCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\TableCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Queue\\Console\\BatchesTableCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\RequestMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ResourceMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\RuleMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ScopeMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\Seeds\\SeederMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Session\\Console\\SessionTableCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ServeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\StubPublishCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\TestMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\TraitMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\VendorPublishCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Foundation\\Console\\ViewMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'migrator' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'migration.repository' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'migration.creator' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Migrations\\Migrator' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\Migrations\\MigrateCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\Migrations\\FreshCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\Migrations\\InstallCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\Migrations\\RefreshCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\Migrations\\ResetCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\Migrations\\RollbackCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\Migrations\\StatusCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Database\\Console\\Migrations\\MigrateMakeCommand' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'composer' => 'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider',
-    'Illuminate\\Concurrency\\ConcurrencyManager' => 'Illuminate\\Concurrency\\ConcurrencyServiceProvider',
-    'image' => 'Illuminate\\Image\\ImageServiceProvider',
-    'hash' => 'Illuminate\\Hashing\\HashServiceProvider',
-    'hash.driver' => 'Illuminate\\Hashing\\HashServiceProvider',
-    'mail.manager' => 'Illuminate\\Mail\\MailServiceProvider',
-    'mailer' => 'Illuminate\\Mail\\MailServiceProvider',
-    'Illuminate\\Mail\\Markdown' => 'Illuminate\\Mail\\MailServiceProvider',
-    'auth.password' => 'Illuminate\\Auth\\Passwords\\PasswordResetServiceProvider',
-    'auth.password.broker' => 'Illuminate\\Auth\\Passwords\\PasswordResetServiceProvider',
-    'Illuminate\\Contracts\\Pipeline\\Hub' => 'Illuminate\\Pipeline\\PipelineServiceProvider',
-    'pipeline' => 'Illuminate\\Pipeline\\PipelineServiceProvider',
-    'queue' => 'Illuminate\\Queue\\QueueServiceProvider',
-    'queue.connection' => 'Illuminate\\Queue\\QueueServiceProvider',
-    'queue.failer' => 'Illuminate\\Queue\\QueueServiceProvider',
-    'queue.listener' => 'Illuminate\\Queue\\QueueServiceProvider',
-    'queue.routes' => 'Illuminate\\Queue\\QueueServiceProvider',
-    'queue.worker' => 'Illuminate\\Queue\\QueueServiceProvider',
-    'redis' => 'Illuminate\\Redis\\RedisServiceProvider',
-    'redis.connection' => 'Illuminate\\Redis\\RedisServiceProvider',
-    'translator' => 'Illuminate\\Translation\\TranslationServiceProvider',
-    'translation.loader' => 'Illuminate\\Translation\\TranslationServiceProvider',
-    'validator' => 'Illuminate\\Validation\\ValidationServiceProvider',
-    'validation.presence' => 'Illuminate\\Validation\\ValidationServiceProvider',
-    'Illuminate\\Contracts\\Validation\\UncompromisedVerifier' => 'Illuminate\\Validation\\ValidationServiceProvider',
-    'Laravel\\Breeze\\Console\\InstallCommand' => 'Laravel\\Breeze\\BreezeServiceProvider',
-    'command.tinker' => 'Laravel\\Tinker\\TinkerServiceProvider',
-  ),
-  'when' => 
-  array (
-    'Illuminate\\Broadcasting\\BroadcastServiceProvider' => 
-    array (
-    ),
-    'Illuminate\\Bus\\BusServiceProvider' => 
-    array (
-    ),
-    'Illuminate\\Cache\\CacheServiceProvider' => 
-    array (
-    ),
-    'Illuminate\\Foundation\\Providers\\ConsoleSupportServiceProvider' => 
-    array (
-    ),
-    'Illuminate\\Concurrency\\ConcurrencyServiceProvider' => 
-    array (
-    ),
-    'Illuminate\\Image\\ImageServiceProvider' => 
-    array (
-    ),
-    'Illuminate\\Hashing\\HashServiceProvider' => 
-    array (
-    ),
-    'Illuminate\\Mail\\MailServiceProvider' => 
-    array (
-    ),
-    'Illuminate\\Auth\\Passwords\\PasswordResetServiceProvider' => 
-    array (
-    ),
-    'Illuminate\\Pipeline\\PipelineServiceProvider' => 
-    array (
-    ),
-    'Illuminate\\Queue\\QueueServiceProvider' => 
-    array (
-    ),
-    'Illuminate\\Redis\\RedisServiceProvider' => 
-    array (
-    ),
-    'Illuminate\\Translation\\TranslationServiceProvider' => 
-    array (
-    ),
-    'Illuminate\\Validation\\ValidationServiceProvider' => 
-    array (
-    ),
-    'Laravel\\Breeze\\BreezeServiceProvider' => 
-    array (
-    ),
-    'Laravel\\Tinker\\TinkerServiceProvider' => 
-    array (
-    ),
-  ),
-);
 ===== FILE: payslip/bootstrap/providers.php =====
 <?php
 
@@ -4636,35 +4419,59 @@ return new class extends Migration {
         Schema::dropIfExists('stamped_copy_requests');
     }
 };
+===== FILE: payslip/database/migrations/2026_09_11_144607_create_audit_logs_table.php =====
+<?php
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('audit_logs', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('user_id')->nullable()->constrained()->nullOnDelete();
+            $table->string('action');                    // e.g. payroll_run.approved
+            $table->string('subject')->nullable();       // e.g. Payroll 2026-10
+            $table->text('description')->nullable();
+            $table->string('ip_address', 45)->nullable();
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('audit_logs');
+    }
+};
 ===== FILE: payslip/database/seeders/DatabaseSeeder.php =====
 <?php
 
 namespace Database\Seeders;
 
 use App\Models\User;
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
 class DatabaseSeeder extends Seeder
 {
-    use WithoutModelEvents;
-
-    /**
-     * Seed the application's database.
-     */
     public function run(): void
     {
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
-        ]);
+        // HR/Admin account — created without UserFactory so seeding works
+        // when fakerphp/faker is not installed (it is require-dev only).
+        User::firstOrCreate(
+            ['email' => 'admin@example.com'],
+            [
+                'name' => 'Admin User',
+                'password' => 'password',
+            ],
+        );
 
-        User::factory()->create([
-            'name' => 'Admin User',
-            'email' => 'admin@example.com',
+        // Project structure & demo data
+        $this->call([
+            SalaryStructureSeeder::class,
+            EmployeeSeeder::class,
+            PortalUserSeeder::class,
         ]);
-
-        User::factory(8)->create();
     }
 }
 
@@ -4868,8 +4675,500 @@ class SalaryStructureSeeder extends Seeder
     RewriteRule ^ index.php [L]
 </IfModule>
 
-===== FILE: payslip/public/hot =====
-http://[::1]:5173
+===== FILE: payslip/public/app.js =====
+const KEY = "payslip-draft";
+const fields = ["name", "role", "empId", "period", "currency", "basic", "allowance", "bonus", "taxRate", "other"];
+const defaults = {
+  name: "Amina Rahman",
+  role: "Finance Lead",
+  empId: "EMP-2041",
+  period: "2026-09",
+  currency: "USD",
+  basic: "4800",
+  allowance: "720",
+  bonus: "250",
+  taxRate: "12",
+  other: "210",
+};
+
+const $ = (id) => document.getElementById(id);
+const num = (v) => Number.parseFloat(v) || 0;
+
+function read() {
+  return Object.fromEntries(fields.map((f) => [f, $(f).value]));
+}
+
+function write(data) {
+  fields.forEach((f) => {
+    if (data[f] != null) $(f).value = data[f];
+  });
+}
+
+function money(n, currency) {
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: currency || "USD" }).format(n);
+  } catch {
+    return `${currency} ${n.toFixed(2)}`;
+  }
+}
+
+function periodLabel(ym) {
+  if (!ym) return "—";
+  const [y, m] = ym.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
+function compute(d) {
+  const gross = num(d.basic) + num(d.allowance) + num(d.bonus);
+  const tax = gross * (num(d.taxRate) / 100);
+  const deductions = num(d.other);
+  const net = gross - tax - deductions;
+  return { gross, tax, deductions, net };
+}
+
+function render() {
+  const d = read();
+  const c = compute(d);
+  const cur = d.currency || "USD";
+  $("p-name").textContent = d.name || "Employee name";
+  $("p-role").textContent = d.role || "Role";
+  $("p-id").textContent = d.empId || "—";
+  $("p-period").textContent = periodLabel(d.period);
+  $("p-basic").textContent = money(num(d.basic), cur);
+  $("p-allowance").textContent = money(num(d.allowance), cur);
+  $("p-bonus").textContent = money(num(d.bonus), cur);
+  $("p-gross").textContent = money(c.gross, cur);
+  $("p-tax").textContent = money(c.tax, cur);
+  $("p-taxrate").textContent = `${num(d.taxRate)}%`;
+  $("p-other").textContent = money(c.deductions, cur);
+  $("p-deductions").textContent = money(c.tax + c.deductions, cur);
+  $("p-net").textContent = money(c.net, cur);
+}
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(toast._id);
+  toast._id = setTimeout(() => {
+    t.hidden = true;
+  }, 1800);
+}
+
+function save() {
+  localStorage.setItem(KEY, JSON.stringify(read()));
+  toast("Draft saved on this device");
+}
+
+function load() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    write(raw ? { ...defaults, ...JSON.parse(raw) } : defaults);
+  } catch {
+    write(defaults);
+  }
+  render();
+}
+
+$("demo-form").addEventListener("input", render);
+$("demo-form").addEventListener("change", render);
+$("save").addEventListener("click", save);
+$("print").addEventListener("click", () => window.print());
+$("reset").addEventListener("click", () => {
+  write(defaults);
+  render();
+  toast("Form reset");
+});
+
+const navToggle = $("nav-toggle");
+const navPanel = $("nav-panel");
+navToggle.addEventListener("click", () => {
+  const open = navToggle.getAttribute("aria-expanded") === "true";
+  navToggle.setAttribute("aria-expanded", String(!open));
+  navPanel.hidden = open;
+});
+navPanel.querySelectorAll("a").forEach((a) => {
+  a.addEventListener("click", () => {
+    navToggle.setAttribute("aria-expanded", "false");
+    navPanel.hidden = true;
+  });
+});
+
+document.querySelectorAll("[data-faq]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const wasOpen = btn.getAttribute("aria-expanded") === "true";
+    document.querySelectorAll("[data-faq]").forEach((b) => {
+      b.setAttribute("aria-expanded", "false");
+      $(b.getAttribute("aria-controls")).hidden = true;
+    });
+    if (!wasOpen) {
+      btn.setAttribute("aria-expanded", "true");
+      $(btn.getAttribute("aria-controls")).hidden = false;
+    }
+  });
+});
+
+load();
+
+===== FILE: payslip/public/index.html =====
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Payslip generates accurate payroll slips with live tax, deductions, and net pay.">
+  <title>Payslip — Clean payroll, instant payslips</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ["DM Sans", "ui-sans-serif", "system-ui"] },
+          colors: { brand: { DEFAULT: "#0f766e", dark: "#115e59", soft: "#ccfbf1" } },
+        },
+      },
+    };
+  </script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="font-sans text-slate-900 antialiased">
+  <a class="skip no-print font-medium text-brand" href="#main">Skip to content</a>
+
+  <header class="no-print sticky top-0 z-50 border-b border-slate-200/80 bg-white/80 backdrop-blur">
+    <div class="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3">
+      <a href="#top" class="flex items-center gap-2.5" aria-label="Payslip home">
+        <span class="grid h-9 w-9 place-items-center rounded-xl bg-brand text-sm font-bold text-white">P</span>
+        <span class="text-lg font-semibold tracking-tight">Payslip</span>
+      </a>
+      <nav class="hidden items-center gap-7 text-sm font-medium text-slate-600 md:flex" aria-label="Primary">
+        <a class="hover:text-brand" href="#features">Features</a>
+        <a class="hover:text-brand" href="#how">How it works</a>
+        <a class="hover:text-brand" href="#demo">Demo</a>
+        <a class="hover:text-brand" href="#pricing">Pricing</a>
+        <a class="hover:text-brand" href="#faq">FAQ</a>
+      </nav>
+      <div class="flex items-center gap-2">
+        <a href="#demo" class="hidden rounded-full bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-dark sm:inline-flex">Try demo</a>
+        <button id="nav-toggle" class="grid h-10 w-10 place-items-center rounded-xl border border-slate-200 md:hidden" type="button" aria-expanded="false" aria-controls="nav-panel" aria-label="Open menu">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 5h12M3 9h12M3 13h12"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="nav-panel" class="border-t border-slate-200 bg-white px-4 py-3 md:hidden" hidden>
+      <nav class="flex flex-col gap-3 text-sm font-medium" aria-label="Mobile">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#demo">Demo</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#faq">FAQ</a>
+        <a href="#demo" class="rounded-full bg-brand px-4 py-2 text-center text-white">Try demo</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section id="top" class="mx-auto grid max-w-6xl scroll-mt-24 items-center gap-12 px-4 pb-16 pt-12 md:grid-cols-2 md:pt-20">
+      <div>
+        <p class="mb-4 inline-flex rounded-full border border-teal-100 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-wider text-brand">Payroll, simplified</p>
+        <h1 class="text-4xl font-bold tracking-tight text-slate-900 md:text-5xl">Clean payslips. Accurate net pay. In seconds.</h1>
+        <p class="mt-4 max-w-lg text-lg text-slate-600">Payslip is a lightweight payroll product for teams that need professional slips without spreadsheets or heavy HR suites.</p>
+        <div class="mt-8 flex flex-wrap gap-3">
+          <a href="#demo" class="rounded-full bg-brand px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-brand-dark">Generate a payslip</a>
+          <a href="#pricing" class="rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 hover:border-slate-300">View pricing</a>
+        </div>
+      </div>
+      <aside class="sheet p-5" aria-hidden="true">
+        <div class="mb-4 flex items-center justify-between">
+          <div>
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">September 2026</p>
+            <p class="font-semibold">Preview slip</p>
+          </div>
+          <span class="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-semibold text-brand-dark">Net ready</span>
+        </div>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between"><span class="text-slate-500">Gross pay</span><span class="font-medium">$5,770.00</span></div>
+          <div class="flex justify-between"><span class="text-slate-500">Tax</span><span class="font-medium">$692.40</span></div>
+          <div class="flex justify-between"><span class="text-slate-500">Deductions</span><span class="font-medium">$210.00</span></div>
+        </div>
+        <div class="mt-4 rounded-2xl bg-slate-900 px-4 py-3 text-white">
+          <p class="text-xs text-slate-300">Take-home</p>
+          <p class="text-2xl font-semibold">$4,867.60</p>
+        </div>
+      </aside>
+    </section>
+
+    <section class="no-print border-y border-slate-200 bg-white/70" aria-label="Product stats">
+      <div class="mx-auto grid max-w-6xl grid-cols-2 gap-6 px-4 py-10 md:grid-cols-4">
+        <div><p class="text-3xl font-bold">12k+</p><p class="text-sm text-slate-500">Payslips generated</p></div>
+        <div><p class="text-3xl font-bold">98.4%</p><p class="text-sm text-slate-500">Calculation accuracy</p></div>
+        <div><p class="text-3xl font-bold">40+</p><p class="text-sm text-slate-500">Teams onboarded</p></div>
+        <div><p class="text-3xl font-bold">2 min</p><p class="text-sm text-slate-500">Average run time</p></div>
+      </div>
+    </section>
+
+    <section id="features" class="no-print mx-auto max-w-6xl scroll-mt-24 px-4 py-20">
+      <p class="text-sm font-semibold uppercase tracking-wider text-brand">Features</p>
+      <h2 class="mt-2 text-3xl font-bold tracking-tight">Everything needed for a clean payroll run</h2>
+      <div class="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        <article class="sheet p-5"><h3 class="font-semibold">Live calculations</h3><p class="mt-2 text-sm text-slate-600">Gross, tax, deductions, and net pay update as you type.</p></article>
+        <article class="sheet p-5"><h3 class="font-semibold">Tax-ready slips</h3><p class="mt-2 text-sm text-slate-600">Apply a tax rate and see withholdings before you print.</p></article>
+        <article class="sheet p-5"><h3 class="font-semibold">Print in one click</h3><p class="mt-2 text-sm text-slate-600">Send a polished slip to the printer with no extra tooling.</p></article>
+        <article class="sheet p-5"><h3 class="font-semibold">Draft autosave</h3><p class="mt-2 text-sm text-slate-600">Keep work on this device with localStorage — no account required.</p></article>
+        <article class="sheet p-5"><h3 class="font-semibold">Clear templates</h3><p class="mt-2 text-sm text-slate-600">A professional layout employees can actually understand.</p></article>
+        <article class="sheet p-5"><h3 class="font-semibold">Multi-currency</h3><p class="mt-2 text-sm text-slate-600">Preview USD, GBP, EUR, PKR, or GHS without leaving the page.</p></article>
+      </div>
+    </section>
+
+    <section id="how" class="no-print mx-auto max-w-6xl scroll-mt-24 px-4 pb-8">
+      <p class="text-sm font-semibold uppercase tracking-wider text-brand">How it works</p>
+      <h2 class="mt-2 text-3xl font-bold tracking-tight">Three steps from numbers to a slip</h2>
+      <ol class="mt-10 grid gap-5 md:grid-cols-3">
+        <li class="sheet p-6"><span class="grid h-9 w-9 place-items-center rounded-full bg-brand text-sm font-bold text-white">1</span><h3 class="mt-4 font-semibold">Enter pay details</h3><p class="mt-2 text-sm text-slate-600">Add salary, allowances, tax rate, and deductions.</p></li>
+        <li class="sheet p-6"><span class="grid h-9 w-9 place-items-center rounded-full bg-brand text-sm font-bold text-white">2</span><h3 class="mt-4 font-semibold">Review live totals</h3><p class="mt-2 text-sm text-slate-600">The preview updates instantly so you catch mistakes early.</p></li>
+        <li class="sheet p-6"><span class="grid h-9 w-9 place-items-center rounded-full bg-brand text-sm font-bold text-white">3</span><h3 class="mt-4 font-semibold">Print or save</h3><p class="mt-2 text-sm text-slate-600">Print the slip or store a draft on this browser.</p></li>
+      </ol>
+    </section>
+
+    <section id="demo" class="mx-auto max-w-6xl scroll-mt-24 px-4 py-20">
+      <div class="no-print mb-8">
+        <p class="text-sm font-semibold uppercase tracking-wider text-brand">Interactive demo</p>
+        <h2 class="mt-2 text-3xl font-bold tracking-tight">Payslip generator</h2>
+        <p class="mt-2 text-slate-600">Edit the form and watch gross pay, tax, deductions, and net pay recalculate.</p>
+      </div>
+      <div class="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]">
+        <form id="demo-form" class="no-print sheet grid gap-4 p-5 sm:grid-cols-2">
+          <label class="grid gap-1 text-sm font-medium sm:col-span-2">Full name
+            <input id="name" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2" autocomplete="name" required>
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Role
+            <input id="role" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Employee ID
+            <input id="empId" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Pay period
+            <input id="period" type="month" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Currency
+            <select id="currency" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+              <option value="USD">USD</option>
+              <option value="GBP">GBP</option>
+              <option value="EUR">EUR</option>
+              <option value="PKR">PKR</option>
+              <option value="GHS">GHS</option>
+            </select>
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Basic salary
+            <input id="basic" type="number" min="0" step="0.01" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Allowances
+            <input id="allowance" type="number" min="0" step="0.01" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Bonus / other earnings
+            <input id="bonus" type="number" min="0" step="0.01" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <label class="grid gap-1 text-sm font-medium">Tax rate (%)
+            <input id="taxRate" type="number" min="0" max="100" step="0.1" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <label class="grid gap-1 text-sm font-medium sm:col-span-2">Other deductions
+            <input id="other" type="number" min="0" step="0.01" class="rounded-xl border border-slate-200 px-3 py-2.5 font-normal outline-none ring-brand focus:ring-2">
+          </label>
+          <div class="flex flex-wrap gap-2 sm:col-span-2">
+            <button id="save" type="button" class="rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark">Save draft</button>
+            <button id="print" type="button" class="rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold">Print</button>
+            <button id="reset" type="button" class="rounded-full px-4 py-2.5 text-sm font-semibold text-slate-600">Reset</button>
+          </div>
+        </form>
+
+        <article id="payslip-sheet" class="sheet overflow-hidden" aria-live="polite">
+          <div class="flex items-start justify-between bg-slate-900 px-5 py-4 text-white">
+            <div>
+              <p class="text-xs uppercase tracking-wider text-slate-300">Payslip</p>
+              <h3 id="p-name" class="text-lg font-semibold"></h3>
+              <p id="p-role" class="text-sm text-slate-300"></p>
+            </div>
+            <div class="text-right text-sm">
+              <p id="p-period" class="font-medium"></p>
+              <p class="text-slate-300">ID <span id="p-id"></span></p>
+            </div>
+          </div>
+          <div class="p-5">
+            <table class="w-full text-sm">
+              <caption class="sr-only">Earnings and deductions</caption>
+              <thead>
+                <tr class="text-left text-slate-500">
+                  <th class="pb-2 font-medium">Item</th>
+                  <th class="pb-2 text-right font-medium">Amount</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr><td class="py-2">Basic salary</td><td id="p-basic" class="py-2 text-right"></td></tr>
+                <tr><td class="py-2">Allowances</td><td id="p-allowance" class="py-2 text-right"></td></tr>
+                <tr><td class="py-2">Bonus / other</td><td id="p-bonus" class="py-2 text-right"></td></tr>
+                <tr class="font-semibold"><td class="py-2">Gross pay</td><td id="p-gross" class="py-2 text-right"></td></tr>
+                <tr><td class="py-2">Tax <span id="p-taxrate" class="text-slate-400"></span></td><td id="p-tax" class="py-2 text-right"></td></tr>
+                <tr><td class="py-2">Other deductions</td><td id="p-other" class="py-2 text-right"></td></tr>
+                <tr><td class="py-2">Total deductions</td><td id="p-deductions" class="py-2 text-right"></td></tr>
+              </tbody>
+            </table>
+            <div class="mt-5 flex items-center justify-between rounded-2xl bg-brand-soft px-4 py-3">
+              <span class="text-sm font-semibold text-brand-dark">Net pay</span>
+              <span id="p-net" class="text-xl font-bold text-slate-900"></span>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="pricing" class="no-print mx-auto max-w-6xl scroll-mt-24 px-4 py-8">
+      <p class="text-sm font-semibold uppercase tracking-wider text-brand">Pricing</p>
+      <h2 class="mt-2 text-3xl font-bold tracking-tight">Simple plans for growing teams</h2>
+      <div class="mt-10 grid gap-5 md:grid-cols-3">
+        <article class="sheet p-6">
+          <h3 class="font-semibold">Starter</h3>
+          <p class="mt-3 text-3xl font-bold">$0<span class="text-base font-medium text-slate-500">/mo</span></p>
+          <ul class="mt-4 space-y-2 text-sm text-slate-600">
+            <li>5 payslips / month</li>
+            <li>Live calculator</li>
+            <li>Print &amp; local drafts</li>
+          </ul>
+          <a href="#demo" class="mt-6 inline-flex rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold">Start free</a>
+        </article>
+        <article class="sheet p-6 ring-2 ring-brand">
+          <p class="text-xs font-semibold uppercase tracking-wide text-brand">Most popular</p>
+          <h3 class="mt-1 font-semibold">Growth</h3>
+          <p class="mt-3 text-3xl font-bold">$19<span class="text-base font-medium text-slate-500">/mo</span></p>
+          <ul class="mt-4 space-y-2 text-sm text-slate-600">
+            <li>Unlimited slips</li>
+            <li>Multi-currency</li>
+            <li>Saved templates</li>
+          </ul>
+          <a href="#demo" class="mt-6 inline-flex rounded-full bg-brand px-4 py-2 text-sm font-semibold text-white">Choose Growth</a>
+        </article>
+        <article class="sheet p-6">
+          <h3 class="font-semibold">Business</h3>
+          <p class="mt-3 text-3xl font-bold">$49<span class="text-base font-medium text-slate-500">/mo</span></p>
+          <ul class="mt-4 space-y-2 text-sm text-slate-600">
+            <li>Team workspaces</li>
+            <li>Audit-ready exports</li>
+            <li>Priority support</li>
+          </ul>
+          <a href="#cta" class="mt-6 inline-flex rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold">Talk to us</a>
+        </article>
+      </div>
+    </section>
+
+    <section class="no-print mx-auto max-w-6xl px-4 py-20" aria-labelledby="stories">
+      <p class="text-sm font-semibold uppercase tracking-wider text-brand">Testimonials</p>
+      <h2 id="stories" class="mt-2 text-3xl font-bold tracking-tight">Trusted by operators who hate messy payroll</h2>
+      <div class="mt-10 grid gap-5 md:grid-cols-3">
+        <figure class="sheet p-6">
+          <blockquote class="text-sm text-slate-700">“We replaced a spreadsheet stack in an afternoon. The live net-pay preview is the feature finance actually uses.”</blockquote>
+          <figcaption class="mt-4 text-sm font-semibold">Lena Okoye <span class="font-normal text-slate-500">· People Ops, Northwind</span></figcaption>
+        </figure>
+        <figure class="sheet p-6">
+          <blockquote class="text-sm text-slate-700">“Printing a clean slip for contractors used to take twenty minutes. Now it is a form and a click.”</blockquote>
+          <figcaption class="mt-4 text-sm font-semibold">Daniel Mensah <span class="font-normal text-slate-500">· Founder, Accra Labs</span></figcaption>
+        </figure>
+        <figure class="sheet p-6">
+          <blockquote class="text-sm text-slate-700">“Drafts stay on the laptop, which our auditors liked more than mystery cloud folders.”</blockquote>
+          <figcaption class="mt-4 text-sm font-semibold">Hira Shah <span class="font-normal text-slate-500">· Controller, Karachi Co</span></figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section id="faq" class="no-print mx-auto max-w-3xl scroll-mt-24 px-4 pb-16">
+      <p class="text-sm font-semibold uppercase tracking-wider text-brand">FAQ</p>
+      <h2 class="mt-2 text-3xl font-bold tracking-tight">Questions, answered</h2>
+      <div class="mt-8 divide-y divide-slate-200 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <div>
+          <button class="faq-btn flex w-full items-center justify-between px-5 py-4 text-left font-medium" type="button" data-faq aria-expanded="false" aria-controls="faq-1">
+            How are tax and net pay calculated?
+            <span class="faq-icon text-xl leading-none text-slate-400 transition" aria-hidden="true">+</span>
+          </button>
+          <p id="faq-1" class="px-5 pb-4 text-sm text-slate-600" hidden>Gross pay is basic salary plus allowances and bonus. Tax is gross × tax rate. Deductions are other withholdings. Net pay is gross minus tax minus deductions.</p>
+        </div>
+        <div>
+          <button class="faq-btn flex w-full items-center justify-between px-5 py-4 text-left font-medium" type="button" data-faq aria-expanded="false" aria-controls="faq-2">
+            Does Save draft need an account?
+            <span class="faq-icon text-xl leading-none text-slate-400 transition" aria-hidden="true">+</span>
+          </button>
+          <p id="faq-2" class="px-5 pb-4 text-sm text-slate-600" hidden>No. Drafts are stored in this browser with localStorage and restored the next time you open the page.</p>
+        </div>
+        <div>
+          <button class="faq-btn flex w-full items-center justify-between px-5 py-4 text-left font-medium" type="button" data-faq aria-expanded="false" aria-controls="faq-3">
+            Can I print the payslip?
+            <span class="faq-icon text-xl leading-none text-slate-400 transition" aria-hidden="true">+</span>
+          </button>
+          <p id="faq-3" class="px-5 pb-4 text-sm text-slate-600" hidden>Yes. Print uses the browser print dialog and hides the rest of the page so only the slip is on the page.</p>
+        </div>
+        <div>
+          <button class="faq-btn flex w-full items-center justify-between px-5 py-4 text-left font-medium" type="button" data-faq aria-expanded="false" aria-controls="faq-4">
+            Is this a full payroll system?
+            <span class="faq-icon text-xl leading-none text-slate-400 transition" aria-hidden="true">+</span>
+          </button>
+          <p id="faq-4" class="px-5 pb-4 text-sm text-slate-600" hidden>This page is a product demo. Growth and Business plans add templates, workspaces, and exports for live payroll teams.</p>
+        </div>
+        <div>
+          <button class="faq-btn flex w-full items-center justify-between px-5 py-4 text-left font-medium" type="button" data-faq aria-expanded="false" aria-controls="faq-5">
+            Which currencies are supported?
+            <span class="faq-icon text-xl leading-none text-slate-400 transition" aria-hidden="true">+</span>
+          </button>
+          <p id="faq-5" class="px-5 pb-4 text-sm text-slate-600" hidden>The generator formats USD, GBP, EUR, PKR, and GHS. Totals stay the same; only the display currency changes.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="cta" class="no-print mx-auto max-w-6xl px-4 pb-20">
+      <div class="rounded-3xl bg-slate-900 px-6 py-12 text-center text-white shadow-lg md:px-16">
+        <h2 class="text-3xl font-bold tracking-tight">Run payroll without the spreadsheet mess</h2>
+        <p class="mx-auto mt-3 max-w-xl text-slate-300">Generate a live payslip now, print it, and save a draft on this device.</p>
+        <a href="#demo" class="mt-6 inline-flex rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-100">Open the generator</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="no-print border-t border-slate-200 bg-white">
+    <div class="mx-auto grid max-w-6xl gap-8 px-4 py-12 sm:grid-cols-2 md:grid-cols-4">
+      <div>
+        <p class="flex items-center gap-2 font-semibold"><span class="grid h-8 w-8 place-items-center rounded-lg bg-brand text-xs text-white">P</span>Payslip</p>
+        <p class="mt-3 text-sm text-slate-500">Modern payslips for teams that want clarity, not clutter.</p>
+      </div>
+      <div>
+        <p class="text-sm font-semibold">Product</p>
+        <ul class="mt-3 space-y-2 text-sm text-slate-600">
+          <li><a href="#features">Features</a></li>
+          <li><a href="#demo">Generator</a></li>
+          <li><a href="#pricing">Pricing</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="text-sm font-semibold">Company</p>
+        <ul class="mt-3 space-y-2 text-sm text-slate-600">
+          <li><a href="#stories">Customers</a></li>
+          <li><a href="#faq">FAQ</a></li>
+          <li><a href="#cta">Contact</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="text-sm font-semibold">Legal</p>
+        <ul class="mt-3 space-y-2 text-sm text-slate-600">
+          <li>Privacy</li>
+          <li>Terms</li>
+        </ul>
+      </div>
+    </div>
+    <p class="border-t border-slate-100 px-4 py-4 text-center text-xs text-slate-500">© 2026 Payslip. All rights reserved.</p>
+  </footer>
+
+  <p id="toast" class="no-print fixed bottom-4 right-4 rounded-full bg-slate-900 px-4 py-2 text-sm text-white shadow-lg" role="status" hidden></p>
+  <script src="/app.js" defer></script>
+</body>
+</html>
+
 ===== FILE: payslip/public/index.php =====
 <?php
 
@@ -4895,6 +5194,65 @@ $app->handleRequest(Request::capture());
 ===== FILE: payslip/public/robots.txt =====
 User-agent: *
 Disallow:
+
+===== FILE: payslip/public/styles.css =====
+:root {
+  --ink: #0b1220;
+  --muted: #5b677a;
+  --brand: #0f766e;
+  --brand-2: #0e7490;
+  --line: #e6ebf2;
+  --bg: #f5f7fb;
+  --card: #fff;
+  --shadow: 0 10px 30px rgba(15, 23, 42, 0.07);
+  --radius: 1.1rem;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  color: var(--ink);
+  background:
+    radial-gradient(900px 420px at 10% -10%, #d9f3ee 0%, transparent 55%),
+    radial-gradient(700px 380px at 100% 0%, #e0f2fe 0%, transparent 50%),
+    var(--bg);
+}
+
+.skip {
+  position: absolute;
+  left: -999px;
+  top: 0.75rem;
+}
+.skip:focus {
+  left: 0.75rem;
+  z-index: 80;
+  border-radius: 0.75rem;
+  background: #fff;
+  padding: 0.5rem 0.9rem;
+  box-shadow: var(--shadow);
+}
+
+.sheet {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.faq-icon { display: inline-block; }
+.faq-btn[aria-expanded="true"] .faq-icon { transform: rotate(45deg); }
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff !important; }
+  main { padding: 0 !important; }
+  #payslip-sheet {
+    box-shadow: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    max-width: none !important;
+  }
+}
 
 ===== FILE: payslip/resources/css/app.css =====
 @tailwind base;
@@ -5347,23 +5705,22 @@ import { Link, usePage } from '@inertiajs/vue3';
 
 const user = usePage().props.auth.user;
 const showingNavigationDropdown = ref(false);
-
 const navigationLinks = [
-    { name: 'Dashboard', href: route('dashboard'), icon: '📊' },
-    { name: 'My Pay Slips', href: route('portal.payslips'), icon: ''},
-    { name: 'Employees', href: route('employees.index'), icon: '' },
-    { name: 'Payroll', href: route('payroll.import'), icon: '' },
-    { name: 'Payroll Runs', href: route('payroll-runs.index'), icon: '' },
-    { name: 'Reports', href: '#', icon: '📈' },
+    { name: 'Dashboard', href: route('dashboard'), routeName: 'dashboard', icon: '📊' },
+    { name: 'My Pay Slips', href: route('portal.payslips'), routeName: 'portal.payslips', icon: '📄' },
+    { name: 'Employees', href: route('employees.index'), routeName: 'employees.*', icon: '👥' },
+    { name: 'Payroll', href: route('payroll.import'), routeName: 'payroll.*', icon: '📥' },
+    { name: 'Payroll Runs', href: route('payroll-runs.index'), routeName: 'payroll-runs.*', icon: '🗓️' },
+    { name: 'Reports', href: route('reports.index'), routeName: 'reports.*', icon: '📈' },
 ];
 
 const configurationLinks = [
-    { name: 'Visual Identity', href: route('settings.visual-identity'), icon: '🎨' },
-    { name: 'Salary Components', href: route('settings.salary-components.index'), icon: '🎨' },
-    { name: 'Company Profile', href: '#', icon: '🏢' },
-    { name: 'Payslip Templates', href: '#', icon: '' },
-    { name: 'Integrations', href: '#', icon: '🔌' },
-    { name: 'Security & Audit', href: '#', icon: '🔒' },
+    { name: 'Company Profile', href: route('settings.company-profile'), routeName: 'settings.company-profile', icon: '🏢' },
+    { name: 'Visual Identity', href: route('settings.visual-identity'), routeName: 'settings.visual-identity', icon: '🎨' },
+    { name: 'Salary Components', href: route('settings.salary-components.index'), routeName: 'settings.salary-components.*', icon: '🧮' },
+    { name: 'Payslip Templates', href: route('settings.payslip-templates'), routeName: 'settings.payslip-templates', icon: '📄' },
+    { name: 'Integrations', href: route('settings.integrations'), routeName: 'settings.integrations', icon: '🔌' },
+    { name: 'Security & Audit', href: route('settings.security-audit'), routeName: 'settings.security-audit', icon: '🔒' },
 ];
 </script>
 
@@ -5387,7 +5744,7 @@ const configurationLinks = [
                         :key="link.name"
                         :href="link.href"
                         class="nav-link"
-                        :class="{ active: link.active || route().current(link.href.replace(/^.*\/\/[^\/]+/, '')) }"
+                        :class="{ active: link.routeName ? route().current(link.routeName) : false }"
                     >
                         <span class="dot"></span>
                         {{ link.name }}
@@ -5414,12 +5771,11 @@ const configurationLinks = [
                         :key="link.name"
                         :href="link.href"
                         class="nav-link"
-                        :class="{ active: route().current(link.href.replace(/^.*\/\/[^\/]+/, '')) }"
+                        :class="{ active: link.routeName ? route().current(link.routeName) : false }"
                     >
                         <span class="dot"></span>
                         {{ link.name }}
                     </Link>
-                    
                 </nav>
             </div>
 
@@ -5460,12 +5816,10 @@ const configurationLinks = [
         <main class="main">
             <div class="topbar">
                 <div class="crumbs">
-                    <span v-if="$slots.header">Configuration &nbsp;/&nbsp; <slot name="page-title">Page</slot></span>
-                    <span v-else>Dashboard</span>
+                    <span>PayrollOS &nbsp;/&nbsp; {{ $page.props.auth.user.name }}</span>
                 </div>
                 <div class="topbar-actions">
-                    <button class="btn btn-ghost">View audit log</button>
-                    <button class="btn btn-ghost">Preview PDF</button>
+                    <Link :href="route('settings.security-audit')" class="btn btn-ghost">View audit log</Link>
                 </div>
             </div>
 
@@ -5474,10 +5828,6 @@ const configurationLinks = [
                 <div class="page-title">
                     <div>
                         <slot name="header" />
-                    </div>
-                    <div class="topbar-actions">
-                        <button class="btn btn-ghost">Discard</button>
-                        <button class="btn btn-primary">Save configuration</button>
                     </div>
                 </div>
             </header>
@@ -7093,6 +7443,207 @@ const confirmDelete = () => {
     padding: 0;
 }
 </style>
+===== FILE: payslip/resources/js/Pages/Integrations/Index.vue =====
+<script setup lang="ts">
+import { ref } from 'vue';
+import { Head } from '@inertiajs/vue3';
+import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
+
+interface ApiSyncRow {
+    id: number;
+    period: string;
+    total_working_days: number;
+    attended_days: number | null;
+    unpaid_leave_days: string;
+    overtime_hours: string;
+    updated_at: string;
+    employee: { id: number; employee_code: string; full_name: string } | null;
+}
+
+const props = defineProps<{
+    webhookUrl: string;
+    tokenConfigured: boolean;
+    tokenMasked: string;
+    apiSyncCount: number;
+    csvSyncCount: number;
+    recentApiSyncs: ApiSyncRow[];
+}>();
+
+const copied = ref<string | null>(null);
+
+const copy = async (text: string, key: string) => {
+    try {
+        await navigator.clipboard.writeText(text);
+        copied.value = key;
+        setTimeout(() => (copied.value = null), 2000);
+    } catch {
+        // clipboard blocked — ignore silently
+    }
+};
+
+const samplePayload = `{
+  "period": "2026-10",
+  "records": [
+    {
+      "employee_code": "EMP-8042",
+      "total_working_days": 22,
+      "attended_days": 20,
+      "unpaid_leave_days": 2,
+      "paid_leave_days": 0,
+      "overtime_hours": 12.5,
+      "late_count": 0
+    }
+  ]
+}`;
+
+const sampleCurl = `curl -X POST ${props.webhookUrl} \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer <VIRTUOHR_API_TOKEN>" \\
+  -d '${samplePayload.replace(/\s+/g, ' ')}'`;
+</script>
+
+<template>
+    <Head title="Integrations" />
+
+    <AuthenticatedLayout>
+        <template #header>
+            <div>
+                <h1>Integrations</h1>
+                <p>VirtuoHR webhook endpoint, API authentication and ingestion statistics.</p>
+            </div>
+        </template>
+
+        <div class="py-6">
+            <div class="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <!-- Webhook configuration -->
+                <div class="card">
+                    <div class="mb-4 flex items-center justify-between">
+                        <h2 class="text-sm font-semibold text-gray-900">VirtuoHR Webhook</h2>
+                        <span
+                            class="rounded-full px-2 py-0.5 text-xs font-medium uppercase"
+                            :class="tokenConfigured ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'"
+                        >
+                            {{ tokenConfigured ? 'Active' : 'Token Missing' }}
+                        </span>
+                    </div>
+
+                    <div class="space-y-4 text-sm">
+                        <div>
+                            <div class="mb-1 text-xs uppercase tracking-wider text-gray-500">Endpoint</div>
+                            <div class="flex items-center gap-2">
+                                <code class="flex-1 rounded-md bg-gray-100 px-3 py-2 text-xs text-indigo-600">{{ webhookUrl }}</code>
+                                <button class="rounded-md border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50" @click="copy(webhookUrl, 'url')">
+                                    {{ copied === 'url' ? '✓ Copied' : 'Copy' }}
+                                </button>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <div class="mb-1 text-xs uppercase tracking-wider text-gray-500">Method</div>
+                                <code class="rounded-md bg-gray-100 px-3 py-2 text-xs font-semibold text-gray-900">POST</code>
+                            </div>
+                            <div>
+                                <div class="mb-1 text-xs uppercase tracking-wider text-gray-500">Auth Header</div>
+                                <code class="rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-700">Authorization: Bearer …</code>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="mb-1 text-xs uppercase tracking-wider text-gray-500">Shared Secret (masked)</div>
+                            <div class="flex items-center gap-2">
+                                <code class="flex-1 rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-700">{{ tokenMasked }}</code>
+                                <button
+                                    class="rounded-md border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                                    :disabled="!tokenConfigured"
+                                    @click="copy(tokenMasked, 'token')"
+                                >
+                                    {{ copied === 'token' ? '✓ Copied' : 'Copy' }}
+                                </button>
+                            </div>
+                            <p class="mt-1 text-xs text-gray-400">Full token sirf server .env mein hai — kabhi UI par expose nahi hota.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Ingestion mix -->
+                <div class="card">
+                    <h2 class="mb-4 text-sm font-semibold text-gray-900">Ingestion Mix (payroll_inputs)</h2>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                            <div class="text-xs uppercase tracking-wider text-gray-500">API Syncs</div>
+                            <div class="mt-1 text-2xl font-bold text-indigo-600">{{ apiSyncCount }}</div>
+                        </div>
+                        <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                            <div class="text-xs uppercase tracking-wider text-gray-500">CSV Imports</div>
+                            <div class="mt-1 text-2xl font-bold text-emerald-600">{{ csvSyncCount }}</div>
+                        </div>
+                    </div>
+
+                    <div class="mt-5">
+                        <div class="mb-2 text-xs uppercase tracking-wider text-gray-500">Recent API Syncs</div>
+                        <div v-if="recentApiSyncs.length" class="space-y-2">
+                            <div
+                                v-for="row in recentApiSyncs"
+                                :key="row.id"
+                                class="flex items-center justify-between rounded-md border border-gray-100 px-3 py-2 text-sm"
+                            >
+                                <div>
+                                    <span class="font-medium text-gray-900">{{ row.employee?.full_name ?? '—' }}</span>
+                                    <span class="ml-2 text-xs text-gray-400">{{ row.employee?.employee_code }}</span>
+                                </div>
+                                <div class="text-xs text-gray-500">{{ row.period }} · unpaid {{ row.unpaid_leave_days }}d</div>
+                            </div>
+                        </div>
+                        <p v-else class="text-sm text-gray-400">No API syncs yet — use the sample cURL below.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sample payload -->
+            <div class="card mb-6">
+                <div class="mb-3 flex items-center justify-between">
+                    <h2 class="text-sm font-semibold text-gray-900">Sample Payload (Phase 4 standard)</h2>
+                    <button class="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50" @click="copy(samplePayload, 'payload')">
+                        {{ copied === 'payload' ? '✓ Copied' : 'Copy' }}
+                    </button>
+                </div>
+                <pre class="code-block">{{ samplePayload }}</pre>
+            </div>
+
+            <!-- Sample cURL -->
+            <div class="card">
+                <div class="mb-3 flex items-center justify-between">
+                    <h2 class="text-sm font-semibold text-gray-900">Test Command (cURL)</h2>
+                    <button class="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50" @click="copy(sampleCurl, 'curl')">
+                        {{ copied === 'curl' ? '✓ Copied' : 'Copy' }}
+                    </button>
+                </div>
+                <pre class="code-block">{{ sampleCurl }}</pre>
+            </div>
+        </div>
+    </AuthenticatedLayout>
+</template>
+
+<style scoped>
+.card {
+    background: #fff;
+    border: 1px solid #e5e9f2;
+    border-radius: 14px;
+    padding: 24px;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
+}
+.code-block {
+    background: #0b1220;
+    color: #cbd5e1;
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    overflow-x: auto;
+    white-space: pre;
+    margin: 0;
+}
+</style>
 ===== FILE: payslip/resources/js/Pages/Payroll/Import.vue =====
 <script setup lang="ts">
 import { computed, ref } from 'vue';
@@ -8602,6 +9153,583 @@ const form = useForm({
     </section>
 </template>
 
+===== FILE: payslip/resources/js/Pages/Reports/Index.vue =====
+<script setup lang="ts">
+import { Head, Link } from '@inertiajs/vue3';
+import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
+
+interface RunSummary {
+    id: number;
+    period: string;
+    status: 'draft' | 'approved' | 'locked';
+    total_earnings: string;
+    total_deductions: string;
+    total_net_pay: string;
+    generated_at: string | null;
+    approved_at: string | null;
+    items_count: number;
+}
+
+interface CurrencyRow {
+    currency_code: string;
+    employees: number;
+    gross_pay: number;
+    total_deductions: number;
+    net_pay: number;
+}
+
+const props = defineProps<{
+    stats: {
+        active_employees: number;
+        branches: number;
+        payroll_runs: number;
+        published_payslips: number;
+        pending_requests: number;
+    };
+    runs: RunSummary[];
+    latestRun: RunSummary | null;
+    currencyBreakdown: CurrencyRow[];
+}>();
+
+const fmt = (v: number | string) =>
+    Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const statCards = [
+    { key: 'active_employees', label: 'Active Employees', icon: '👥', color: 'text-indigo-600' },
+    { key: 'branches', label: 'Branches', icon: '🏢', color: 'text-sky-600' },
+    { key: 'payroll_runs', label: 'Payroll Runs', icon: '🗓️', color: 'text-amber-600' },
+    { key: 'published_payslips', label: 'Payslips Published', icon: '📄', color: 'text-emerald-600' },
+    { key: 'pending_requests', label: 'Pending Requests', icon: '🖋️', color: 'text-red-600' },
+] as const;
+</script>
+
+<template>
+    <Head title="Reports" />
+
+    <AuthenticatedLayout>
+        <template #header>
+            <div>
+                <h1>Reports & Analytics</h1>
+                <p>System statistics, payroll execution summaries and multi-currency breakdowns.</p>
+            </div>
+        </template>
+
+        <div class="py-6">
+            <!-- Stat cards -->
+            <div class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5">
+                <div v-for="card in statCards" :key="card.key" class="card">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs uppercase tracking-wider text-gray-500">{{ card.label }}</span>
+                        <span>{{ card.icon }}</span>
+                    </div>
+                    <div class="mt-2 text-2xl font-bold" :class="card.color">{{ props.stats[card.key] }}</div>
+                </div>
+            </div>
+
+            <!-- Currency breakdown (latest non-draft run) -->
+            <div v-if="latestRun" class="card mb-6 overflow-hidden p-0">
+                <div class="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-6 py-4">
+                    <h2 class="text-sm font-semibold text-gray-900">
+                        Currency Breakdown — {{ latestRun.period }}
+                        <span class="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium uppercase text-emerald-700">
+                            {{ latestRun.status }}
+                        </span>
+                    </h2>
+                    <Link :href="route('payroll-runs.show', latestRun.id)" class="text-sm font-medium text-indigo-600 hover:text-indigo-800">
+                        Open review grid →
+                    </Link>
+                </div>
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Currency</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Employees</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Gross Pay</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Deductions</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Net Pay</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100 bg-white">
+                        <tr v-for="row in currencyBreakdown" :key="row.currency_code">
+                            <td class="px-6 py-4 text-sm font-semibold text-gray-900">{{ row.currency_code }}</td>
+                            <td class="px-6 py-4 text-sm text-gray-600">{{ row.employees }}</td>
+                            <td class="px-6 py-4 text-sm text-gray-600">{{ fmt(row.gross_pay) }}</td>
+                            <td class="px-6 py-4 text-sm text-red-600">− {{ fmt(row.total_deductions) }}</td>
+                            <td class="px-6 py-4 text-sm font-semibold text-gray-900">{{ fmt(row.net_pay) }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p class="px-6 py-3 text-xs text-gray-400">
+                    Totals are grouped per currency (multi-branch) — cross-currency sums are never mixed.
+                </p>
+            </div>
+            <div v-else class="card mb-6 py-10 text-center text-sm text-gray-500">
+                No approved payroll runs yet — currency breakdowns will appear after the first approval.
+            </div>
+
+            <!-- Payroll run history -->
+            <div class="card overflow-hidden p-0">
+                <div class="border-b border-gray-100 bg-gray-50 px-6 py-4">
+                    <h2 class="text-sm font-semibold text-gray-900">Payroll Run History</h2>
+                </div>
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Period</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Status</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Employees</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Gross</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Deductions</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Net Pay</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100 bg-white">
+                        <tr v-for="run in runs" :key="run.id">
+                            <td class="px-6 py-4 text-sm font-semibold text-gray-900">{{ run.period }}</td>
+                            <td class="px-6 py-4">
+                                <span
+                                    class="rounded-full px-2 py-0.5 text-xs font-medium uppercase"
+                                    :class="run.status === 'draft' ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'"
+                                >
+                                    {{ run.status }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 text-sm text-gray-600">{{ run.items_count }}</td>
+                            <td class="px-6 py-4 text-sm text-gray-600">{{ fmt(run.total_earnings) }}</td>
+                            <td class="px-6 py-4 text-sm text-red-600">− {{ fmt(run.total_deductions) }}</td>
+                            <td class="px-6 py-4 text-sm font-semibold text-gray-900">{{ fmt(run.total_net_pay) }}</td>
+                            <td class="px-6 py-4 text-right">
+                                <Link :href="route('payroll-runs.show', run.id)" class="text-sm font-medium text-indigo-600 hover:text-indigo-800">
+                                    Review Grid
+                                </Link>
+                            </td>
+                        </tr>
+                        <tr v-if="!runs.length">
+                            <td colspan="7" class="px-6 py-10 text-center text-sm text-gray-500">No payroll runs yet.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </AuthenticatedLayout>
+</template>
+
+<style scoped>
+.card {
+    background: #fff;
+    border: 1px solid #e5e9f2;
+    border-radius: 14px;
+    padding: 24px;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
+}
+.card.p-0 {
+    padding: 0;
+}
+</style>
+===== FILE: payslip/resources/js/Pages/Security/Audit.vue =====
+<script setup lang="ts">
+import { Head } from '@inertiajs/vue3';
+import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
+
+interface AuditEntry {
+    id: number;
+    action: string;
+    subject: string | null;
+    description: string | null;
+    ip_address: string | null;
+    created_at: string;
+    user: { id: number; name: string } | null;
+}
+
+defineProps<{
+    logs: AuditEntry[];
+    environment: {
+        app_env: string;
+        app_debug: boolean;
+        session_driver: string;
+        queue_connection: string;
+        mail_mailer: string;
+        db_connection: string;
+    };
+}>();
+
+const badgeClass = (action: string) => {
+    if (action.includes('approved')) return 'bg-emerald-50 text-emerald-700';
+    if (action.includes('published')) return 'bg-indigo-50 text-indigo-700';
+    if (action.includes('rejected')) return 'bg-red-50 text-red-700';
+    if (action.includes('created')) return 'bg-amber-50 text-amber-700';
+    return 'bg-gray-100 text-gray-600';
+};
+</script>
+
+<template>
+    <Head title="Security & Audit" />
+
+    <AuthenticatedLayout>
+        <template #header>
+            <div>
+                <h1>Security & Audit</h1>
+                <p>Environment hardening overview and a complete activity trail of critical payroll actions.</p>
+            </div>
+        </template>
+
+        <div class="py-6">
+            <!-- Environment overview -->
+            <div class="card mb-6">
+                <h2 class="mb-4 text-sm font-semibold text-gray-900">Security & Environment Overview</h2>
+                <div class="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-gray-500">Environment</div>
+                        <div class="mt-1 text-sm font-semibold text-gray-900">{{ environment.app_env }}</div>
+                    </div>
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-gray-500">Debug Mode</div>
+                        <div class="mt-1 text-sm font-semibold" :class="environment.app_debug ? 'text-red-600' : 'text-emerald-600'">
+                            {{ environment.app_debug ? 'ON — disable in production' : 'OFF' }}
+                        </div>
+                    </div>
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-gray-500">CSRF Protection</div>
+                        <div class="mt-1 text-sm font-semibold text-emerald-600">Enabled</div>
+                    </div>
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-gray-500">Session Driver</div>
+                        <div class="mt-1 text-sm font-semibold text-gray-900">{{ environment.session_driver }}</div>
+                    </div>
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-gray-500">Queue</div>
+                        <div class="mt-1 text-sm font-semibold text-gray-900">{{ environment.queue_connection }}</div>
+                    </div>
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-gray-500">Mailer</div>
+                        <div class="mt-1 text-sm font-semibold text-gray-900">{{ environment.mail_mailer }}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Audit trail -->
+            <div class="card overflow-hidden p-0">
+                <div class="border-b border-gray-100 bg-gray-50 px-6 py-4">
+                    <h2 class="text-sm font-semibold text-gray-900">Audit Trail (latest 200 events)</h2>
+                </div>
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">When</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">User</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Action</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Subject</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Description</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">IP</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100 bg-white">
+                        <tr v-for="log in logs" :key="log.id">
+                            <td class="px-6 py-3 text-sm text-gray-500">{{ new Date(log.created_at).toLocaleString() }}</td>
+                            <td class="px-6 py-3 text-sm font-medium text-gray-900">{{ log.user?.name ?? 'System' }}</td>
+                            <td class="px-6 py-3">
+                                <span class="rounded-full px-2 py-0.5 text-xs font-medium" :class="badgeClass(log.action)">
+                                    {{ log.action }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-3 text-sm text-gray-600">{{ log.subject ?? '—' }}</td>
+                            <td class="px-6 py-3 text-sm text-gray-600">{{ log.description ?? '—' }}</td>
+                            <td class="px-6 py-3 text-xs text-gray-400">{{ log.ip_address ?? '—' }}</td>
+                        </tr>
+                        <tr v-if="!logs.length">
+                            <td colspan="6" class="px-6 py-10 text-center text-sm text-gray-500">
+                                No audit events yet — approve a payroll run or save branding to generate one.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </AuthenticatedLayout>
+</template>
+
+<style scoped>
+.card {
+    background: #fff;
+    border: 1px solid #e5e9f2;
+    border-radius: 14px;
+    padding: 24px;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
+}
+.card.p-0 {
+    padding: 0;
+}
+</style>
+===== FILE: payslip/resources/js/Pages/Settings/CompanyProfile.vue =====
+<script setup lang="ts">
+import { Head, Link } from '@inertiajs/vue3';
+import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
+import PrimaryButton from '@/Components/PrimaryButton.vue';
+
+defineProps<{
+    profile: {
+        company_name: string;
+        tax_id: string | null;
+        registration_number: string | null;
+        address: string | null;
+        header_image_url: string | null;
+        footer_image_url: string | null;
+        template_type: string;
+        primary_color: string;
+        accent_color: string;
+    };
+}>();
+</script>
+
+<template>
+    <Head title="Company Profile" />
+    <AuthenticatedLayout>
+        <template #header>
+            <div class="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                    <h1>Company Profile</h1>
+                    <p>Legal entity details printed on every payslip & stamped copy.</p>
+                </div>
+                <Link :href="route('settings.visual-identity')">
+                    <PrimaryButton>✏️ Edit in Visual Identity</PrimaryButton>
+                </Link>
+            </div>
+        </template>
+
+        <div class="py-6">
+            <div class="card mb-6">
+                <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-gray-500">Company Name</div>
+                        <div class="mt-1 text-lg font-semibold text-gray-900">{{ profile.company_name }}</div>
+                    </div>
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-gray-500">Tax ID</div>
+                        <div class="mt-1 text-sm text-gray-900">{{ profile.tax_id ?? '—' }}</div>
+                    </div>
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-gray-500">Registration Number</div>
+                        <div class="mt-1 text-sm text-gray-900">{{ profile.registration_number ?? '—' }}</div>
+                    </div>
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-gray-500">Address</div>
+                        <div class="mt-1 text-sm text-gray-900">{{ profile.address ?? '—' }}</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2 class="mb-4 text-sm font-semibold text-gray-900">Letterhead Assets</h2>
+                <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
+                    <div>
+                        <div class="mb-2 text-xs uppercase tracking-wider text-gray-500">Header Banner</div>
+                        <div class="flex h-28 items-center justify-center rounded-lg border border-gray-200 bg-gray-50">
+                            <img v-if="profile.header_image_url" :src="profile.header_image_url" class="max-h-full max-w-full object-contain" />
+                            <span v-else class="text-sm text-gray-400">Not uploaded</span>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="mb-2 text-xs uppercase tracking-wider text-gray-500">Footer Banner</div>
+                        <div class="flex h-28 items-center justify-center rounded-lg border border-gray-200 bg-gray-50">
+                            <img v-if="profile.footer_image_url" :src="profile.footer_image_url" class="max-h-full max-w-full object-contain" />
+                            <span v-else class="text-sm text-gray-400">Not uploaded</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </AuthenticatedLayout>
+</template>
+
+<style scoped>
+.card {
+    background: #fff;
+    border: 1px solid #e5e9f2;
+    border-radius: 14px;
+    padding: 24px;
+}
+</style>
+===== FILE: payslip/resources/js/Pages/Settings/PayslipTemplates.vue =====
+<script setup lang="ts">
+import { computed } from 'vue';
+import { Head, Link } from '@inertiajs/vue3';
+import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
+import PrimaryButton from '@/Components/PrimaryButton.vue';
+
+const props = defineProps<{
+    profile: {
+        company_name: string;
+        template_type: 'modern' | 'classic' | 'compact' | 'custom';
+        custom_html: string | null;
+        primary_color: string;
+        accent_color: string;
+        font_family: string;
+        page_margin: string;
+        header_image_url: string | null;
+        footer_image_url: string | null;
+    };
+}>();
+
+const templates = [
+    { key: 'modern', name: 'Modern', desc: 'Accent letterhead bar with generous whitespace. Recommended default.' },
+    { key: 'classic', name: 'Classic', desc: 'Traditional centered letterhead with formal presentation.' },
+    { key: 'compact', name: 'Compact', desc: 'Minimal header for dense, multi-page statements.' },
+];
+
+const activeTemplate = computed(
+    () => templates.find((t) => t.key === props.profile.template_type) ?? null,
+);
+</script>
+
+<template>
+    <Head title="Payslip Templates" />
+
+    <AuthenticatedLayout>
+        <template #header>
+            <div class="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                    <h1>Payslip Templates</h1>
+                    <p>Built-in layouts rendered via the HTML-to-PDF engine. Brand tokens apply automatically.</p>
+                </div>
+                <Link :href="route('settings.visual-identity')">
+                    <PrimaryButton>🎨 Change in Visual Identity</PrimaryButton>
+                </Link>
+            </div>
+        </template>
+
+        <div class="py-6">
+            <!-- Template cards -->
+            <div class="mb-6 grid grid-cols-1 gap-6 md:grid-cols-3">
+                <div
+                    v-for="tpl in templates"
+                    :key="tpl.key"
+                    class="card relative"
+                    :class="{ 'ring-2 ring-indigo-500': profile.template_type === tpl.key }"
+                >
+                    <span
+                        v-if="profile.template_type === tpl.key"
+                        class="absolute right-4 top-4 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700"
+                    >
+                        ACTIVE
+                    </span>
+
+                    <!-- Mini preview -->
+                    <div class="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                        <div
+                            class="mb-2 h-4 rounded"
+                            :style="{ background: tpl.key === 'compact' ? '#94a3b8' : profile.primary_color }"
+                        ></div>
+                        <div class="space-y-1.5">
+                            <div class="h-2 w-4/5 rounded bg-gray-200"></div>
+                            <div class="h-2 w-3/5 rounded bg-gray-200"></div>
+                            <div class="h-2 w-full rounded bg-gray-200"></div>
+                            <div class="h-2 w-2/3 rounded bg-gray-200"></div>
+                        </div>
+                        <div class="mt-2 h-3 rounded" :style="{ background: profile.accent_color }"></div>
+                    </div>
+
+                    <div class="text-sm font-semibold text-gray-900">{{ tpl.name }}</div>
+                    <p class="mt-1 text-xs text-gray-500">{{ tpl.desc }}</p>
+                </div>
+            </div>
+
+            <!-- ==================== DETAILS SECTION (improved) ==================== -->
+            <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <!-- Active template details -->
+                <div class="card">
+                    <h2 class="mb-4 text-sm font-semibold text-gray-900">Active Template Details</h2>
+                    <div class="space-y-3 text-sm">
+                        <div class="flex items-center justify-between border-b border-gray-100 pb-3">
+                            <span class="text-gray-500">Template</span>
+                            <span class="flex items-center gap-2 font-semibold capitalize text-gray-900">
+                                {{ activeTemplate?.name ?? 'Custom HTML' }}
+                                <span class="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">ACTIVE</span>
+                            </span>
+                        </div>
+                        <div class="flex items-start justify-between gap-6 border-b border-gray-100 pb-3">
+                            <span class="shrink-0 text-gray-500">Description</span>
+                            <span class="text-right text-gray-900">
+                                {{ activeTemplate?.desc ?? 'Raw HTML/CSS with system variable tags (enterprise clients).' }}
+                            </span>
+                        </div>
+                        <div class="flex items-center justify-between border-b border-gray-100 pb-3">
+                            <span class="text-gray-500">Render Engine</span>
+                            <span class="text-gray-900">DOMPDF · A4 Portrait</span>
+                        </div>
+                        <div class="flex items-center justify-between border-b border-gray-100 pb-3">
+                            <span class="text-gray-500">Company</span>
+                            <span class="font-medium text-gray-900">{{ profile.company_name }}</span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-gray-500">Custom HTML</span>
+                            <span v-if="profile.template_type === 'custom'" class="font-semibold text-indigo-600">Active</span>
+                            <span v-else-if="profile.custom_html" class="font-medium text-amber-600">Uploaded (inactive)</span>
+                            <span v-else class="text-gray-400">Not uploaded</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Brand tokens & letterhead -->
+                <div class="card">
+                    <h2 class="mb-4 text-sm font-semibold text-gray-900">Brand Tokens & Letterhead</h2>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                            <div class="text-xs uppercase tracking-wider text-gray-500">Primary Color</div>
+                            <div class="mt-2 flex items-center gap-2">
+                                <span class="inline-block h-5 w-5 rounded border border-gray-200" :style="{ background: profile.primary_color }"></span>
+                                <span class="text-sm font-medium text-gray-900">{{ profile.primary_color }}</span>
+                            </div>
+                        </div>
+                        <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                            <div class="text-xs uppercase tracking-wider text-gray-500">Accent Color</div>
+                            <div class="mt-2 flex items-center gap-2">
+                                <span class="inline-block h-5 w-5 rounded border border-gray-200" :style="{ background: profile.accent_color }"></span>
+                                <span class="text-sm font-medium text-gray-900">{{ profile.accent_color }}</span>
+                            </div>
+                        </div>
+                        <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                            <div class="text-xs uppercase tracking-wider text-gray-500">Font Family</div>
+                            <div class="mt-2 text-sm font-medium text-gray-900">{{ profile.font_family }}</div>
+                        </div>
+                        <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                            <div class="text-xs uppercase tracking-wider text-gray-500">Page Margin</div>
+                            <div class="mt-2 text-sm font-medium text-gray-900">{{ profile.page_margin }}</div>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 grid grid-cols-2 gap-4">
+                        <div>
+                            <div class="mb-2 text-xs uppercase tracking-wider text-gray-500">Header Banner</div>
+                            <div class="flex h-20 items-center justify-center rounded-lg border border-gray-200 bg-gray-50">
+                                <img v-if="profile.header_image_url" :src="profile.header_image_url" class="max-h-full max-w-full object-contain" alt="Header" />
+                                <span v-else class="text-xs text-gray-400">Not uploaded</span>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="mb-2 text-xs uppercase tracking-wider text-gray-500">Footer Banner</div>
+                            <div class="flex h-20 items-center justify-center rounded-lg border border-gray-200 bg-gray-50">
+                                <img v-if="profile.footer_image_url" :src="profile.footer_image_url" class="max-h-full max-w-full object-contain" alt="Footer" />
+                                <span v-else class="text-xs text-gray-400">Not uploaded</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </AuthenticatedLayout>
+</template>
+
+<style scoped>
+.card {
+    background: #fff;
+    border: 1px solid #e5e9f2;
+    border-radius: 14px;
+    padding: 24px;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
+}
+</style>
 ===== FILE: payslip/resources/js/Pages/Settings/SalaryComponents.vue =====
 <script setup lang="ts">
 import { computed, ref } from 'vue';
@@ -9005,6 +10133,7 @@ const form = useForm({
 
 const headerPreview = ref(props.profile.header_image_url);
 const footerPreview = ref(props.profile.footer_image_url);
+const templateOptions: Array<'modern' | 'classic' | 'compact'> = ['modern', 'classic', 'compact'];
 
 const handleHeaderUpload = (event: Event) => {
     const file = (event.target as HTMLInputElement).files?.[0];
@@ -9129,7 +10258,7 @@ const submit = () => {
                     <h3 class="text-lg font-medium text-gray-900 mb-4">Template Selection Engine</h3>
                     <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
                         <div 
-                            v-for="tpl in ['modern', 'classic', 'compact']" 
+                            v-for="tpl in templateOptions" 
                             :key="tpl"
                             @click="form.template_type = tpl"
                             :class="['cursor-pointer rounded-lg border p-4 transition-all', form.template_type === tpl ? 'border-indigo-500 ring-2 ring-indigo-100' : 'border-gray-200 hover:border-indigo-300']"
@@ -11091,7 +12220,9 @@ use App\Http\Controllers\PayrollRunController;
 use App\Http\Controllers\PayrollImportController;
 use App\Http\Controllers\EmployeeController;
 use App\Http\Controllers\Portal\PayslipPortalController;
-use Illuminate\Foundation\Application;
+use App\Http\Controllers\ReportController;
+use App\Http\Controllers\IntegrationController;
+use App\Http\Controllers\AuditLogController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -11102,12 +12233,7 @@ use Inertia\Inertia;
 */
 
 Route::get('/', function () {
-    return Inertia::render('Welcome', [
-        'canLogin' => Route::has('login'),
-        'canRegister' => Route::has('register'),
-        'laravelVersion' => Application::VERSION,
-        'phpVersion' => PHP_VERSION,
-    ]);
+    return response()->file(public_path('index.html'));
 });
 
 // 👇 THIS IS THE MISSING PIECE 👇
@@ -11117,10 +12243,18 @@ Route::get('/dashboard', function () {
 
 Route::middleware('auth')->group(function () {
 
+    // Inside Route::middleware('auth')->group(...):
+    Route::get('/settings/security-audit', [AuditLogController::class, 'index'])->name('settings.security-audit');
+    Route::get('/reports', [ReportController::class, 'index'])->name('reports.index');
+    Route::get('/settings/integrations', [IntegrationController::class, 'index'])->name('settings.integrations');
+
     // HR stamped-copy workflow
     Route::get('/stamped-requests', [StampedCopyRequestController::class, 'index'])->name('stamped-requests.index');
     Route::post('/stamped-requests/{stampedCopyRequest}/approve', [StampedCopyRequestController::class, 'approve'])->name('stamped-requests.approve');
     Route::post('/stamped-requests/{stampedCopyRequest}/reject', [StampedCopyRequestController::class, 'reject'])->name('stamped-requests.reject');
+
+    Route::get('/settings/company-profile', [CompanyProfileController::class, 'show'])->name('settings.company-profile');
+    Route::get('/settings/payslip-templates', [CompanyProfileController::class, 'templates'])->name('settings.payslip-templates');
 
     // Employee portal request
     Route::post('/portal/stamped-requests', [StampedCopyRequestController::class, 'store'])->name('portal.stamped-requests.store');

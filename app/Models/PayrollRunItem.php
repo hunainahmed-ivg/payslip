@@ -31,4 +31,31 @@ class PayrollRunItem extends Model
     {
         return $this->belongsTo(Employee::class);
     }
+
+    protected static function booted(): void
+    {
+        static::saving(function (self $item) {
+            if (! $item->exists) {
+                return;
+            }
+
+            $run = $item->payrollRun;
+
+            if ($run && $run->status !== 'draft') {
+                throw new \RuntimeException(
+                    'Payroll run items cannot be modified because the payroll run is no longer in draft status.'
+                );
+            }
+        });
+
+        static::deleting(function (self $item) {
+            $run = $item->payrollRun;
+
+            if ($run && $run->status !== 'draft') {
+                throw new \RuntimeException(
+                    'Payroll run items cannot be deleted because the payroll run is no longer in draft status.'
+                );
+            }
+        });
+    }
 }

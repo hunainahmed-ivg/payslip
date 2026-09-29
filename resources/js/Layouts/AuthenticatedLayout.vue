@@ -42,6 +42,12 @@ const workspaceLinks = computed(() =>
             permission: Permission.PayrollRunsManage,
         },
         {
+            name: 'Salary Increments',
+            href: route('salary-increments.index'),
+            routeName: 'salary-increments.*',
+            permission: Permission.SalaryIncrementsManage,
+        },
+        {
             name: 'Reports',
             href: route('reports.index'),
             routeName: 'reports.*',
@@ -63,6 +69,7 @@ const configurationLinks = computed(() =>
         { name: 'Company Profile', href: route('settings.company-profile'), routeName: 'settings.company-profile', permission: Permission.SettingsCompanyProfile },
         { name: 'Visual Identity', href: route('settings.visual-identity'), routeName: 'settings.visual-identity', permission: Permission.SettingsVisualIdentity },
         { name: 'Salary Components', href: route('settings.salary-components.index'), routeName: 'settings.salary-components.*', permission: Permission.SettingsSalaryComponents },
+        { name: 'Registration Documents', href: route('settings.registration-documents.index'), routeName: 'settings.registration-documents.*', permission: Permission.SettingsRegistrationDocuments },
         { name: 'Payslip Templates', href: route('settings.payslip-templates'), routeName: 'settings.payslip-templates', permission: Permission.SettingsPayslipTemplates },
         { name: 'Integrations', href: route('settings.integrations'), routeName: 'settings.integrations', permission: Permission.SettingsIntegrations },
         { name: 'API Guidelines', href: route('settings.api-guidelines'), routeName: 'settings.api-guidelines', permission: Permission.SettingsApiGuidelines },

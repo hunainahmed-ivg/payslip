@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use Database\Factories\CompanyProfileFactory;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
@@ -9,6 +11,9 @@ use Illuminate\Support\Facades\Storage;
 
 class CompanyProfile extends Model
 {
+    /** @use HasFactory<CompanyProfileFactory> */
+    use HasFactory;
+
     protected $fillable = [
         'company_name', 'tax_id', 'registration_number', 'address',
         'header_image_path', 'footer_image_path',

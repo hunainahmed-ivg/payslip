@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { Head, Link, useForm, router } from '@inertiajs/vue3';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import PrimaryButton from '@/Components/PrimaryButton.vue';
@@ -18,6 +18,15 @@ interface Branch {
     name: string;
     currency_code: string;
     currency_symbol: string;
+}
+
+interface DocumentType {
+    id: number;
+    title: string;
+    type: string;
+    required: boolean;
+    allow_front_back: boolean;
+    profile_pic_required: boolean;
 }
 
 interface Employee {
@@ -39,15 +48,23 @@ const props = withDefaults(
     defineProps<{
         employees: Employee[];
         branches: Branch[];
+        document_types?: DocumentType[];
+        profile_pic_required?: boolean;
         success?: string;
     }>(),
-    { success: undefined },
+    {
+        document_types: () => [],
+        profile_pic_required: false,
+        success: undefined,
+    },
 );
 
 const showModal = ref(false);
 const editing = ref<Employee | null>(null);
 const deleting = ref<Employee | null>(null);
 const search = ref('');
+const profilePicture = ref<File | null>(null);
+const documentFiles = ref<Record<string, { single?: File | null; front?: File | null; back?: File | null }>>({});
 
 const form = useForm({
     employee_code: '',
@@ -60,6 +77,8 @@ const form = useForm({
     base_salary: '0',
     joined_on: '',
     is_active: true,
+    profile_picture: null as File | null,
+    documents: {} as Record<string, { single?: File | null; front?: File | null; back?: File | null }>,
 });
 
 const deleteForm = useForm({});
@@ -87,12 +106,22 @@ const money = (employee: Employee) => {
     );
 };
 
-// Branch-aware currency auto-fill (ISO 4217 from branch, manual override allowed)
 const onBranchChange = () => {
     const branch = props.branches.find((b) => String(b.id) === String(form.branch_id));
     if (branch) {
         form.currency_code = branch.currency_code;
     }
+};
+
+const resetDocumentFiles = () => {
+    const next: Record<string, { single?: File | null; front?: File | null; back?: File | null }> = {};
+    props.document_types.forEach((doc) => {
+        next[String(doc.id)] = doc.allow_front_back
+            ? { front: null, back: null }
+            : { single: null };
+    });
+    documentFiles.value = next;
+    profilePicture.value = null;
 };
 
 const openCreate = () => {
@@ -107,7 +136,10 @@ const openCreate = () => {
     form.base_salary = '0';
     form.joined_on = '';
     form.is_active = true;
+    form.profile_picture = null;
+    form.documents = {};
     form.clearErrors();
+    resetDocumentFiles();
     showModal.value = true;
 };
 
@@ -123,27 +155,62 @@ const openEdit = (employee: Employee) => {
     form.base_salary = employee.base_salary;
     form.joined_on = employee.joined_on ? employee.joined_on.slice(0, 10) : '';
     form.is_active = employee.is_active;
+    form.profile_picture = null;
+    form.documents = {};
     form.clearErrors();
+    resetDocumentFiles();
     showModal.value = true;
 };
 
+const onProfilePictureChange = (event: Event) => {
+    const input = event.target as HTMLInputElement;
+    profilePicture.value = input.files?.[0] ?? null;
+};
+
+const onDocumentFileChange = (typeId: number, side: 'single' | 'front' | 'back', event: Event) => {
+    const input = event.target as HTMLInputElement;
+    const key = String(typeId);
+    if (!documentFiles.value[key]) {
+        documentFiles.value[key] = {};
+    }
+    documentFiles.value[key][side] = input.files?.[0] ?? null;
+};
+
 const submit = () => {
+    form.profile_picture = profilePicture.value;
+    form.documents = documentFiles.value;
+
+    const options = {
+        forceFormData: true,
+        preserveScroll: true,
+        onSuccess: () => {
+            showModal.value = false;
+            form.transform((data) => data);
+        },
+    };
+
     if (editing.value) {
-        form.put(route('employees.update', editing.value.id), {
-            preserveScroll: true,
-            onSuccess: () => {
-                showModal.value = false;
-            },
-        });
+        form
+            .transform((data) => {
+                const { base_salary: _ignored, ...rest } = data;
+                return { ...rest, _method: 'put' };
+            })
+            .post(route('employees.update', editing.value.id), options);
     } else {
-        form.post(route('employees.store'), {
-            preserveScroll: true,
-            onSuccess: () => {
-                showModal.value = false;
-            },
-        });
+        form
+            .transform((data) => {
+                const { _method: _ignored, ...rest } = data as typeof data & { _method?: string };
+                return rest;
+            })
+            .post(route('employees.store'), options);
     }
 };
+
+watch(showModal, (open) => {
+    if (!open) {
+        form.transform((data) => data);
+    }
+});
 
 const confirmDelete = () => {
     if (!deleting.value) return;
@@ -156,7 +223,6 @@ const confirmDelete = () => {
 };
 
 const showBulkImport = ref(false);
-
 </script>
 
 <template>
@@ -190,12 +256,10 @@ const showBulkImport = ref(false);
                 {{ success }}
             </div>
 
-            <!-- Search -->
             <div class="mb-4">
                 <TextInput v-model="search" class="w-full max-w-sm" placeholder="Search by name, code or department..." />
             </div>
 
-            <!-- Employees table -->
             <div class="card overflow-hidden p-0">
                 <table class="min-w-full divide-y divide-gray-200">
                     <thead class="bg-gray-50">
@@ -249,13 +313,12 @@ const showBulkImport = ref(false);
                 </table>
             </div>
 
-            <!-- Create / Edit Modal -->
             <Modal :show="showModal" @close="showModal = false">
                 <div class="p-6">
                     <h2 class="text-lg font-medium text-gray-900">
                         {{ editing ? 'Edit Employee' : 'New Employee' }}
                     </h2>
-                    <form class="mt-6 space-y-4" @submit.prevent="submit">
+                    <form class="mt-6 max-h-[70vh] space-y-4 overflow-y-auto pr-1" @submit.prevent="submit">
                         <div class="grid grid-cols-2 gap-4">
                             <div>
                                 <InputLabel for="employee_code" value="Employee Code" />
@@ -307,14 +370,23 @@ const showBulkImport = ref(false);
                                 <InputLabel for="currency_code" value="Currency (ISO 4217)" />
                                 <TextInput id="currency_code" v-model="form.currency_code" class="mt-1 block w-full" required :maxlength="3" />
                                 <InputError :message="form.errors.currency_code" class="mt-2" />
-                                <p class="mt-1 text-xs text-gray-500">Auto-filled from branch, editable override.</p>
                             </div>
                         </div>
 
                         <div class="grid grid-cols-2 gap-4">
                             <div>
                                 <InputLabel for="base_salary" value="Base Salary" />
-                                <TextInput id="base_salary" v-model="form.base_salary" type="number" step="0.01" min="0" class="mt-1 block w-full" required />
+                                <TextInput
+                                    id="base_salary"
+                                    v-model="form.base_salary"
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    class="mt-1 block w-full"
+                                    :required="!editing"
+                                    :disabled="!!editing"
+                                />
+                                <p v-if="editing" class="mt-1 text-xs text-amber-600">Salary changes go through Salary Increments.</p>
                                 <InputError :message="form.errors.base_salary" class="mt-2" />
                             </div>
                             <div>
@@ -334,19 +406,55 @@ const showBulkImport = ref(false);
                             Active
                         </label>
 
+                        <div v-if="profile_pic_required || document_types.length" class="space-y-3 rounded-lg border border-gray-200 bg-gray-50 p-4">
+                            <h3 class="text-sm font-semibold text-gray-900">Registration documents</h3>
+
+                            <div v-if="profile_pic_required || !editing">
+                                <InputLabel for="profile_picture" :value="profile_pic_required ? 'Profile picture (required)' : 'Profile picture'" />
+                                <input
+                                    id="profile_picture"
+                                    type="file"
+                                    accept="image/*"
+                                    class="mt-1 block w-full text-sm"
+                                    @change="onProfilePictureChange"
+                                />
+                                <InputError :message="form.errors.profile_picture" class="mt-2" />
+                            </div>
+
+                            <div v-for="doc in document_types" :key="doc.id" class="rounded-md border border-gray-200 bg-white p-3">
+                                <div class="mb-2 text-sm font-medium text-gray-800">
+                                    {{ doc.title }}
+                                    <span v-if="doc.required" class="text-xs text-amber-600">(required)</span>
+                                </div>
+                                <div v-if="doc.allow_front_back" class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <InputLabel :value="'Front'" />
+                                        <input type="file" accept=".jpg,.jpeg,.png,.pdf" class="mt-1 block w-full text-sm" @change="onDocumentFileChange(doc.id, 'front', $event)" />
+                                        <InputError :message="form.errors[`documents.${doc.id}.front`]" class="mt-2" />
+                                    </div>
+                                    <div>
+                                        <InputLabel :value="'Back'" />
+                                        <input type="file" accept=".jpg,.jpeg,.png,.pdf" class="mt-1 block w-full text-sm" @change="onDocumentFileChange(doc.id, 'back', $event)" />
+                                        <InputError :message="form.errors[`documents.${doc.id}.back`]" class="mt-2" />
+                                    </div>
+                                </div>
+                                <div v-else>
+                                    <input type="file" accept=".jpg,.jpeg,.png,.pdf" class="mt-1 block w-full text-sm" @change="onDocumentFileChange(doc.id, 'single', $event)" />
+                                    <InputError :message="form.errors[`documents.${doc.id}.single`]" class="mt-2" />
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="mt-6 flex justify-end gap-3">
                             <SecondaryButton type="button" @click="showModal = false">Cancel</SecondaryButton>
                             <PrimaryButton :disabled="form.processing">
                                 {{ editing ? 'Update' : 'Create' }}
                             </PrimaryButton>
-
-                            
                         </div>
                     </form>
                 </div>
             </Modal>
 
-            <!-- Delete Confirmation Modal -->
             <Modal :show="!!deleting" @close="deleting = null">
                 <div class="p-6">
                     <h2 class="text-lg font-medium text-gray-900">Delete Employee</h2>

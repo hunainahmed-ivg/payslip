@@ -13,11 +13,13 @@ enum Permission: string
     case PayrollRunsManage = 'payroll-runs.manage';
     case ReportsView = 'reports.view';
     case StampedRequestsManage = 'stamped-requests.manage';
+    case SalaryIncrementsManage = 'salary-increments.manage';
 
     case CompaniesManage = 'companies.manage';
     case SettingsCompanyProfile = 'settings.company-profile';
     case SettingsVisualIdentity = 'settings.visual-identity';
     case SettingsSalaryComponents = 'settings.salary-components';
+    case SettingsRegistrationDocuments = 'settings.registration-documents';
     case SettingsPayslipTemplates = 'settings.payslip-templates';
     case SettingsIntegrations = 'settings.integrations';
     case SettingsApiGuidelines = 'settings.api-guidelines';

@@ -2,22 +2,25 @@
 
 use App\Enums\Permission;
 use App\Http\Controllers\ApiGuidelinesController;
-use App\Http\Controllers\CompanyController;
-use App\Http\Controllers\ProfileController;
-use App\Http\Controllers\StampedCopyRequestController;
-use App\Http\Controllers\Settings\CompanyProfileController;
-use App\Http\Controllers\Settings\UserManagementController;
-use App\Http\Controllers\EmployeeSalaryComponentController;
-use App\Http\Controllers\PayrollRunController;
-use App\Http\Controllers\PayrollImportController;
-use App\Http\Controllers\EmployeeController;
-use App\Http\Controllers\EmployeeBulkImportController;
-use App\Http\Controllers\Portal\PayslipPortalController;
-use App\Http\Controllers\PayslipAccessController;
-use App\Http\Controllers\ReportController;
-use App\Http\Controllers\IntegrationController;
 use App\Http\Controllers\AuditLogController;
+use App\Http\Controllers\CompanyController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\EmployeeBulkImportController;
+use App\Http\Controllers\EmployeeController;
+use App\Http\Controllers\EmployeeSalaryComponentController;
+use App\Http\Controllers\IntegrationController;
+use App\Http\Controllers\PayrollImportController;
+use App\Http\Controllers\PayrollRunController;
+use App\Http\Controllers\PayslipAccessController;
+use App\Http\Controllers\Portal\PayslipPortalController;
+use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\ReportController;
+use App\Http\Controllers\SalaryIncrementController;
+use App\Http\Controllers\Settings\CompanyProfileController;
+use App\Http\Controllers\Settings\RegistrationDocumentTypeController;
+use App\Http\Controllers\Settings\SalaryComponentController;
+use App\Http\Controllers\Settings\UserManagementController;
+use App\Http\Controllers\StampedCopyRequestController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -135,6 +138,21 @@ Route::middleware('auth')->group(function () {
         Route::delete('/settings/salary-components/{component}', [SalaryComponentController::class, 'destroy'])->name('settings.salary-components.destroy');
     });
 
+    Route::middleware('permission:'.Permission::SettingsRegistrationDocuments->value)->group(function () {
+        Route::get('/settings/registration-documents', [RegistrationDocumentTypeController::class, 'index'])->name('settings.registration-documents.index');
+        Route::post('/settings/registration-documents', [RegistrationDocumentTypeController::class, 'store'])->name('settings.registration-documents.store');
+        Route::put('/settings/registration-documents/{documentType}', [RegistrationDocumentTypeController::class, 'update'])->name('settings.registration-documents.update');
+        Route::delete('/settings/registration-documents/{documentType}', [RegistrationDocumentTypeController::class, 'destroy'])->name('settings.registration-documents.destroy');
+    });
+
+    Route::middleware('permission:'.Permission::SalaryIncrementsManage->value)->prefix('salary-increments')->name('salary-increments.')->group(function () {
+        Route::get('/', [SalaryIncrementController::class, 'index'])->name('index');
+        Route::post('/', [SalaryIncrementController::class, 'store'])->name('store');
+        Route::post('/preview', [SalaryIncrementController::class, 'preview'])->name('preview');
+        Route::get('/export/csv', [SalaryIncrementController::class, 'exportCsv'])->name('export.csv');
+        Route::get('/export/pdf', [SalaryIncrementController::class, 'exportPdf'])->name('export.pdf');
+    });
+
     Route::middleware('permission:'.Permission::EmployeesManage->value)->group(function () {
         Route::get('/employees', [EmployeeController::class, 'index'])->name('employees.index');
         Route::post('/employees', [EmployeeController::class, 'store'])->name('employees.store');
@@ -147,6 +165,8 @@ Route::middleware('auth')->group(function () {
         Route::get('/employees/{employee}', [EmployeeController::class, 'show'])->name('employees.show');
         Route::put('/employees/{employee}', [EmployeeController::class, 'update'])->name('employees.update');
         Route::delete('/employees/{employee}', [EmployeeController::class, 'destroy'])->name('employees.destroy');
+        Route::get('/employees/{employee}/documents/{document}', [EmployeeController::class, 'downloadDocument'])
+            ->name('employees.documents.download');
 
         Route::post('/employees/{employee}/salary-components', [EmployeeSalaryComponentController::class, 'store'])->name('employees.salary-components.store');
         Route::put('/employees/{employee}/salary-components/{override}', [EmployeeSalaryComponentController::class, 'update'])->name('employees.salary-components.update');

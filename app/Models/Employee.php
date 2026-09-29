@@ -2,15 +2,21 @@
 
 namespace App\Models;
 
+use Database\Factories\EmployeeFactory;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Employee extends Model
 {
+    /** @use HasFactory<EmployeeFactory> */
+    use HasFactory;
+
     protected $fillable = [
         'user_id', 'employee_code', 'full_name', 'email', 'department', 'designation',
         'branch_id', 'currency_code', 'base_salary', 'joined_on', 'is_active',
+        'profile_picture_path',
     ];
 
     protected $casts = [
@@ -37,5 +43,20 @@ class Employee extends Model
     public function stampedRequests(): HasMany
     {
         return $this->hasMany(StampedCopyRequest::class);
+    }
+
+    public function documents(): HasMany
+    {
+        return $this->hasMany(EmployeeDocument::class);
+    }
+
+    public function salaryIncrements(): HasMany
+    {
+        return $this->hasMany(SalaryIncrement::class);
+    }
+
+    public function salaryLedgerEntries(): HasMany
+    {
+        return $this->hasMany(SalaryLedgerEntry::class);
     }
 }

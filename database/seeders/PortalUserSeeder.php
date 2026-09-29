@@ -18,12 +18,21 @@ class PortalUserSeeder extends Seeder
         ];
 
         foreach ($portalUsers as $data) {
-            $user = User::firstOrCreate(
+            $user = User::updateOrCreate(
                 ['email' => $data['email']],
-                ['name' => $data['name'], 'password' => Hash::make('password')],
+                [
+                    'name' => $data['name'],
+                    'password' => Hash::make('password'),
+                    'role' => 'employee',
+                ],
             );
 
             Employee::where('email', $data['email'])->update(['user_id' => $user->id]);
+
+            $employee = Employee::where('email', $data['email'])->with('branch')->first();
+            if ($employee?->branch?->company_id) {
+                $user->update(['company_id' => $employee->branch->company_id]);
+            }
         }
     }
 }

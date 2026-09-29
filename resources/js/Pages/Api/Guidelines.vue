@@ -12,6 +12,8 @@ import InputError from '@/Components/InputError.vue';
 interface TokenRow {
     id: number;
     name: string;
+    company_id: number | null;
+    company_name: string | null;
     last_used_at: string | null;
     created_at: string | null;
     expires_at: string | null;
@@ -19,6 +21,8 @@ interface TokenRow {
 
 const props = defineProps<{
     baseUrl: string;
+    companyId: number | null;
+    companyName: string | null;
     columns: string[];
     endpoints: {
         template: string;
@@ -90,6 +94,11 @@ const templateCurl = `curl -X GET "${props.endpoints.template}" \\
             <div>
                 <h1>API Guidelines</h1>
                 <p>Import employees with Excel/CSV in the UI, or through authenticated API endpoints.</p>
+                <p v-if="companyName" class="mt-1 text-sm text-gray-500">
+                    Tokens created here are scoped to <strong>{{ companyName }}</strong>
+                    <span v-if="companyId"> (company ID {{ companyId }})</span>.
+                    Employee imports only affect branches belonging to that company.
+                </p>
             </div>
         </template>
 
@@ -176,6 +185,7 @@ const templateCurl = `curl -X GET "${props.endpoints.template}" \\
                             <tr>
                                 <th class="px-4 py-2 text-left text-xs font-medium uppercase text-gray-500">Name</th>
                                 <th class="px-4 py-2 text-left text-xs font-medium uppercase text-gray-500">Created</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium uppercase text-gray-500">Company</th>
                                 <th class="px-4 py-2 text-left text-xs font-medium uppercase text-gray-500">Last used</th>
                                 <th class="px-4 py-2 text-right text-xs font-medium uppercase text-gray-500">Action</th>
                             </tr>
@@ -184,13 +194,14 @@ const templateCurl = `curl -X GET "${props.endpoints.template}" \\
                             <tr v-for="token in tokens" :key="token.id">
                                 <td class="px-4 py-2 font-medium text-gray-900">{{ token.name }}</td>
                                 <td class="px-4 py-2 text-gray-600">{{ token.created_at || '—' }}</td>
+                                <td class="px-4 py-2 text-gray-600">{{ token.company_name ?? '—' }}</td>
                                 <td class="px-4 py-2 text-gray-600">{{ token.last_used_at || 'Never' }}</td>
                                 <td class="px-4 py-2 text-right">
                                     <DangerButton type="button" @click="revokeToken(token.id)">Revoke</DangerButton>
                                 </td>
                             </tr>
                             <tr v-if="!tokens.length">
-                                <td colspan="4" class="px-4 py-6 text-center text-gray-500">No API tokens yet.</td>
+                                <td colspan="5" class="px-4 py-6 text-center text-gray-500">No API tokens yet.</td>
                             </tr>
                         </tbody>
                     </table>

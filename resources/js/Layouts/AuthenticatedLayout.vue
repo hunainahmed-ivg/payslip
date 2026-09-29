@@ -1,40 +1,75 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { Link, router, usePage } from '@inertiajs/vue3';
+import { Permission } from '@/constants/permissions';
+import { usePermissions } from '@/composables/usePermissions';
 
 const page = usePage();
 const user = computed(() => page.props.auth.user);
-const isAdmin = computed(() => !!user.value?.is_admin);
+const { can, roleLabel } = usePermissions();
 const companyName = computed(() => (page.props.companyName as string) || 'Payslip Engine');
 
-const navigationLinks = computed(() => {
-    const links = [
-        { name: 'Dashboard', href: route('dashboard'), routeName: 'dashboard', adminOnly: false },
-        { name: 'My Payslips', href: route('portal.payslips'), routeName: 'portal.payslips', adminOnly: false },
-    ];
+const workspaceLinks = computed(() =>
+    [
+        {
+            name: 'Dashboard',
+            href: route('dashboard'),
+            routeName: 'dashboard',
+            permission: Permission.DashboardView,
+        },
+        {
+            name: 'My Payslips',
+            href: route('portal.payslips'),
+            routeName: 'portal.payslips',
+            permission: Permission.PortalPayslips,
+        },
+        {
+            name: 'Employees',
+            href: route('employees.index'),
+            routeName: 'employees.*',
+            permission: Permission.EmployeesManage,
+        },
+        {
+            name: 'Payroll Import',
+            href: route('payroll.import'),
+            routeName: 'payroll.*',
+            permission: Permission.PayrollImport,
+        },
+        {
+            name: 'Payroll Runs',
+            href: route('payroll-runs.index'),
+            routeName: 'payroll-runs.*',
+            permission: Permission.PayrollRunsManage,
+        },
+        {
+            name: 'Reports',
+            href: route('reports.index'),
+            routeName: 'reports.*',
+            permission: Permission.ReportsView,
+        },
+        {
+            name: 'Stamped Requests',
+            href: route('stamped-requests.index'),
+            routeName: 'stamped-requests.*',
+            permission: Permission.StampedRequestsManage,
+            showPending: true,
+        },
+    ].filter((link) => can(link.permission)),
+);
 
-    if (isAdmin.value) {
-        links.push(
-            { name: 'Employees', href: route('employees.index'), routeName: 'employees.*', adminOnly: true },
-            { name: 'Payroll Import', href: route('payroll.import'), routeName: 'payroll.*', adminOnly: true },
-            { name: 'Payroll Runs', href: route('payroll-runs.index'), routeName: 'payroll-runs.*', adminOnly: true },
-            { name: 'Reports', href: route('reports.index'), routeName: 'reports.*', adminOnly: true },
-        );
-    }
-
-    return links;
-});
-
-const configurationLinks = [
-    { name: 'Companies', href: route('companies.index'), routeName: 'companies.*' },
-    { name: 'Company Profile', href: route('settings.company-profile'), routeName: 'settings.company-profile' },
-    { name: 'Visual Identity', href: route('settings.visual-identity'), routeName: 'settings.visual-identity' },
-    { name: 'Salary Components', href: route('settings.salary-components.index'), routeName: 'settings.salary-components.*' },
-    { name: 'Payslip Templates', href: route('settings.payslip-templates'), routeName: 'settings.payslip-templates' },
-    { name: 'Integrations', href: route('settings.integrations'), routeName: 'settings.integrations' },
-    { name: 'API Guidelines', href: route('settings.api-guidelines'), routeName: 'settings.api-guidelines' },
-    { name: 'Security & Audit', href: route('settings.security-audit'), routeName: 'settings.security-audit' },
-];
+const configurationLinks = computed(() =>
+    [
+        { name: 'Companies', href: route('companies.index'), routeName: 'companies.*', permission: Permission.CompaniesManage },
+        { name: 'Company Profile', href: route('settings.company-profile'), routeName: 'settings.company-profile', permission: Permission.SettingsCompanyProfile },
+        { name: 'Visual Identity', href: route('settings.visual-identity'), routeName: 'settings.visual-identity', permission: Permission.SettingsVisualIdentity },
+        { name: 'Salary Components', href: route('settings.salary-components.index'), routeName: 'settings.salary-components.*', permission: Permission.SettingsSalaryComponents },
+        { name: 'Payslip Templates', href: route('settings.payslip-templates'), routeName: 'settings.payslip-templates', permission: Permission.SettingsPayslipTemplates },
+        { name: 'Integrations', href: route('settings.integrations'), routeName: 'settings.integrations', permission: Permission.SettingsIntegrations },
+        { name: 'API Guidelines', href: route('settings.api-guidelines'), routeName: 'settings.api-guidelines', permission: Permission.SettingsApiGuidelines },
+        { name: 'Security & Audit', href: route('settings.security-audit'), routeName: 'settings.security-audit', permission: Permission.SettingsSecurityAudit },
+        { name: 'Users & Access', href: route('settings.users.index'), routeName: 'settings.users.*', permission: Permission.UsersManage },
+    ].filter((link) => can(link.permission)),
+);
 
 const companies = computed(() => (page.props.companies as Array<{ id: number; company_name: string }>) || []);
 const currentCompany = computed(() => page.props.currentCompany as { id: number; company_name: string } | null);
@@ -55,7 +90,7 @@ const switchCompany = (event: Event) => {
                     <div class="brand-name">{{ companyName }}</div>
                     <div class="brand-sub">Payslip Engine</div>
                     <select
-                        v-if="isAdmin && companies.length > 1"
+                        v-if="user?.is_platform_operator && companies.length > 1"
                         class="company-switcher"
                         :value="currentCompany?.id"
                         @change="switchCompany"
@@ -69,7 +104,7 @@ const switchCompany = (event: Event) => {
                 <div class="nav-group-label">Workspace</div>
                 <nav class="nav">
                     <Link
-                        v-for="link in navigationLinks"
+                        v-for="link in workspaceLinks"
                         :key="link.name"
                         :href="link.href"
                         class="nav-link"
@@ -77,23 +112,17 @@ const switchCompany = (event: Event) => {
                     >
                         <span class="dot"></span>
                         {{ link.name }}
-                    </Link>
-                    <Link
-                        v-if="isAdmin"
-                        :href="route('stamped-requests.index')"
-                        class="nav-link"
-                        :class="{ active: route().current('stamped-requests.*') }"
-                    >
-                        <span class="dot"></span>
-                        Stamped Requests
-                        <span v-if="$page.props.pendingStampedCount" class="pending-pill">
+                        <span
+                            v-if="link.showPending && $page.props.pendingStampedCount"
+                            class="pending-pill"
+                        >
                             {{ $page.props.pendingStampedCount }}
                         </span>
                     </Link>
                 </nav>
             </div>
 
-            <div v-if="isAdmin">
+            <div v-if="configurationLinks.length">
                 <div class="nav-group-label">Configuration</div>
                 <nav class="nav">
                     <Link
@@ -114,7 +143,7 @@ const switchCompany = (event: Event) => {
                 <div class="user-card">
                     <div class="user-info">
                         <div class="user-name">{{ user?.name }}</div>
-                        <div class="user-role">{{ isAdmin ? 'Administrator' : 'Employee' }}</div>
+                        <div class="user-role">{{ roleLabel }}</div>
                     </div>
                     <Link
                         :href="route('logout')"
@@ -137,7 +166,13 @@ const switchCompany = (event: Event) => {
                     <span>{{ companyName }} / {{ user?.name }}</span>
                 </div>
                 <div class="topbar-actions">
-                    <Link v-if="isAdmin" :href="route('settings.security-audit')" class="btn btn-ghost">View audit log</Link>
+                    <Link
+                        v-if="can(Permission.SettingsSecurityAudit)"
+                        :href="route('settings.security-audit')"
+                        class="btn btn-ghost"
+                    >
+                        View audit log
+                    </Link>
                     <Link :href="route('profile.edit')" class="btn btn-ghost">Profile</Link>
                 </div>
             </div>

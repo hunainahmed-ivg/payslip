@@ -87,7 +87,8 @@ class EmployeeBulkImportController extends Controller
             $report = $this->service->process(
                 $request->file('file'),
                 dryRun: true,
-                updateExisting: $request->boolean('update_existing')
+                updateExisting: $request->boolean('update_existing'),
+                companyId: \App\Support\CurrentCompany::id(),
             );
         } catch (\Throwable $e) {
             $report = $this->exceptionReport($e);
@@ -110,7 +111,8 @@ class EmployeeBulkImportController extends Controller
             $report = $this->service->process(
                 $request->file('file'),
                 dryRun: false,
-                updateExisting: $request->boolean('update_existing')
+                updateExisting: $request->boolean('update_existing'),
+                companyId: \App\Support\CurrentCompany::id(),
             );
         } catch (\Throwable $e) {
             $report = $this->exceptionReport($e);

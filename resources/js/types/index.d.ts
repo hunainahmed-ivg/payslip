@@ -4,7 +4,11 @@ export interface User {
     email: string;
     email_verified_at?: string;
     role?: string;
+    role_label?: string;
     is_admin?: boolean;
+    is_platform_operator?: boolean;
+    company_id?: number | null;
+    permissions?: string[];
 }
 
 export type PageProps<

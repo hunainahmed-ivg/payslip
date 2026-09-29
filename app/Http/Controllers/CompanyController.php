@@ -17,8 +17,17 @@ class CompanyController extends Controller
 {
     public function index(): Response
     {
-        $companies = CompanyProfile::query()
-            ->withCount(['branches', 'employees'])
+        $user = auth()->user();
+
+        $companiesQuery = CompanyProfile::query()
+            ->withCount(['branches', 'employees']);
+
+        if ($user && ! $user->isPlatformOperator()) {
+            $companyId = $user->effectiveCompanyId();
+            $companiesQuery->where('id', $companyId);
+        }
+
+        $companies = $companiesQuery
             ->orderBy('company_name')
             ->get()
             ->map(function (CompanyProfile $company) {
@@ -136,6 +145,7 @@ class CompanyController extends Controller
     public function switch(CompanyProfile $company): RedirectResponse
     {
         abort_unless($company->is_active, 403, 'Cannot switch to an inactive company.');
+        abort_unless(auth()->user()?->canAccessCompany($company->id), 403, 'You cannot access that company.');
 
         CurrentCompany::set($company->id);
 

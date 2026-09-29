@@ -29,7 +29,7 @@ class EmployeeBulkImportService
     /**
      * Process employee bulk import file.
      */
-    public function process(UploadedFile $file, bool $dryRun = true, bool $updateExisting = false): array
+    public function process(UploadedFile $file, bool $dryRun = true, bool $updateExisting = false, ?int $companyId = null): array
     {
         $rows = $this->parseFile($file);
 
@@ -39,9 +39,11 @@ class EmployeeBulkImportService
             ->unique()
             ->values();
 
-        $branches = Branch::query()
-            ->whereIn('code', $branchCodes)
-            ->pluck('id', 'code');
+        $branchesQuery = Branch::query()->whereIn('code', $branchCodes);
+        if ($companyId) {
+            $branchesQuery->where('company_id', $companyId);
+        }
+        $branches = $branchesQuery->pluck('id', 'code');
 
         $reportRows = [];
         $validCount = 0;
@@ -73,6 +75,10 @@ class EmployeeBulkImportService
             } else {
                 $existingEmployee = Employee::query()
                     ->where('employee_code', $employeeCode)
+                    ->when($companyId, fn ($q) => $q->whereHas(
+                        'branch',
+                        fn ($b) => $b->where('company_id', $companyId),
+                    ))
                     ->first();
 
                 if (isset($seenEmployeeCodes[$employeeCode])) {
@@ -93,7 +99,9 @@ class EmployeeBulkImportService
             if ($branchCode === '') {
                 $errors[] = 'Branch code is required.';
             } elseif (! isset($branches[$branchCode])) {
-                $errors[] = 'Branch code does not exist.';
+                $errors[] = $companyId
+                    ? 'Branch code does not exist for your company.'
+                    : 'Branch code does not exist.';
             }
 
             if ($email !== '') {
@@ -204,7 +212,7 @@ class EmployeeBulkImportService
             return $report;
         }
 
-        DB::transaction(function () use ($reportRows, $updateExisting, &$createdCount, &$updatedCount) {
+        DB::transaction(function () use ($reportRows, $updateExisting, $companyId, &$createdCount, &$updatedCount) {
             foreach ($reportRows as $row) {
                 if ($row['status'] !== 'valid') {
                     continue;
@@ -214,6 +222,10 @@ class EmployeeBulkImportService
 
                 $existing = Employee::query()
                     ->where('employee_code', $data['employee_code'])
+                    ->when($companyId, fn ($q) => $q->whereHas(
+                        'branch',
+                        fn ($b) => $b->where('company_id', $companyId),
+                    ))
                     ->first();
 
                 if ($existing) {

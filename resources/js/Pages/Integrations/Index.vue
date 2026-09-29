@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { Head, Link } from '@inertiajs/vue3';
+import { Head, Link, useForm } from '@inertiajs/vue3';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 
 interface SyncEvent {
@@ -28,8 +28,12 @@ interface ApiSyncRow {
 
 const props = defineProps<{
     webhookUrl: string;
+    companyId: number | null;
+    companyName: string | null;
+    companyHeader: string;
     secretConfigured: boolean;
     secretMasked: string;
+    hasCompanySecret: boolean;
     signatureHeader: string;
     timestampHeader: string;
     idempotencyHeader: string;
@@ -37,7 +41,11 @@ const props = defineProps<{
     csvSyncCount: number;
     recentApiSyncs: ApiSyncRow[];
     recentEvents: SyncEvent[];
+    success?: string;
+    plainWebhookSecret?: string | null;
 }>();
+
+const rotateForm = useForm({});
 
 const copied = ref<string | null>(null);
 const syncPeriod = ref(new Date().toISOString().slice(0, 7));
@@ -76,12 +84,17 @@ const samplePayload = `{
   ]
 }`;
 
-const sampleCurl = computed(() => `curl -X POST ${props.webhookUrl} \\
+const sampleCurl = computed(() => {
+    const companyLine = props.companyId
+        ? `  -H "${props.companyHeader}: ${props.companyId}" \\\n`
+        : '';
+    return `curl -X POST ${props.webhookUrl} \\
   -H "Content-Type: application/json" \\
-  -H "${props.signatureHeader}: sha256=<hmac_hex>" \\
+${companyLine}  -H "${props.signatureHeader}: sha256=<hmac_hex>" \\
   -H "${props.timestampHeader}: <unix_timestamp>" \\
   -H "${props.idempotencyHeader}: <unique-key>" \\
-  -d '${samplePayload.replace(/\s+/g, ' ')}'`);
+  -d '${samplePayload.replace(/\s+/g, ' ')}'`;
+});
 
 const checkSyncStatus = async () => {
     syncLoading.value = true;
@@ -121,6 +134,17 @@ const checkSyncStatus = async () => {
         </template>
 
         <div class="py-6">
+            <div v-if="success" class="mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+                {{ success }}
+            </div>
+            <div
+                v-if="plainWebhookSecret"
+                class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+            >
+                <strong>New webhook secret (copy now):</strong>
+                <code class="mt-2 block break-all rounded bg-white px-2 py-1">{{ plainWebhookSecret }}</code>
+            </div>
+
             <div class="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
                 <div class="card">
                     <div class="mb-4 flex items-center justify-between">
@@ -132,6 +156,11 @@ const checkSyncStatus = async () => {
                             {{ secretConfigured ? 'Configured' : 'Secret Missing' }}
                         </span>
                     </div>
+
+                    <p v-if="companyName" class="mb-3 text-sm text-gray-600">
+                        Tenant: <strong>{{ companyName }}</strong>
+                        <span v-if="companyId"> · ID {{ companyId }}</span>
+                    </p>
 
                     <div class="space-y-4 text-sm">
                         <div>
@@ -157,10 +186,29 @@ const checkSyncStatus = async () => {
                             <div class="mb-1 text-xs uppercase tracking-wider text-gray-500">Signature Header</div>
                             <code class="rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-700">{{ signatureHeader }}: sha256=&lt;hex&gt;</code>
                         </div>
+                        <div v-if="companyId">
+                            <div class="mb-1 text-xs uppercase tracking-wider text-gray-500">Company Header</div>
+                            <code class="rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-700">{{ companyHeader }}: {{ companyId }}</code>
+                        </div>
                         <div>
                             <div class="mb-1 text-xs uppercase tracking-wider text-gray-500">Webhook Secret (masked)</div>
                             <code class="rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-700">{{ secretMasked }}</code>
-                            <p class="mt-1 text-xs text-gray-400">Set VIRTUOHR_WEBHOOK_SECRET in the server environment. The full secret is never shown in the UI.</p>
+                            <p class="mt-1 text-xs text-gray-400">
+                                Each company has its own secret. Generate one below, or use the global
+                                <code>VIRTUOHR_WEBHOOK_SECRET</code> fallback when no company header is sent.
+                            </p>
+                            <form
+                                class="mt-3"
+                                @submit.prevent="rotateForm.post(route('settings.integrations.webhook-secret'), { preserveScroll: true })"
+                            >
+                                <button
+                                    type="submit"
+                                    class="rounded-md bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+                                    :disabled="rotateForm.processing || !companyId"
+                                >
+                                    {{ hasCompanySecret ? 'Rotate company webhook secret' : 'Generate company webhook secret' }}
+                                </button>
+                            </form>
                         </div>
                     </div>
                 </div>

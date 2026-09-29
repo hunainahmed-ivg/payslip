@@ -9,8 +9,24 @@ class CurrentCompany
 {
     public const SESSION_KEY = 'current_company_id';
 
+    public static function bind(int $companyId): void
+    {
+        app()->instance('current_company_id', $companyId);
+    }
+
+    public static function clearBinding(): void
+    {
+        if (app()->bound('current_company_id')) {
+            app()->forgetInstance('current_company_id');
+        }
+    }
+
     public static function id(): ?int
     {
+        if (app()->bound('current_company_id')) {
+            return (int) app('current_company_id');
+        }
+
         $id = Session::get(self::SESSION_KEY);
 
         if ($id) {
@@ -48,10 +64,12 @@ class CurrentCompany
     public static function set(int $companyId): void
     {
         Session::put(self::SESSION_KEY, $companyId);
+        self::bind($companyId);
     }
 
     public static function clear(): void
     {
         Session::forget(self::SESSION_KEY);
+        self::clearBinding();
     }
 }

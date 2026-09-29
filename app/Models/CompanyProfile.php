@@ -14,11 +14,12 @@ class CompanyProfile extends Model
         'header_image_path', 'footer_image_path',
         'template_type', 'custom_html',
         'primary_color', 'accent_color', 'font_family', 'page_margin',
-        'tax_brackets', 'is_active',
+        'tax_brackets', 'is_active', 'webhook_secret',
     ];
 
     protected $casts = [
         'tax_brackets' => 'array',
+        'webhook_secret' => 'encrypted',
         'is_active' => 'boolean',
     ];
 

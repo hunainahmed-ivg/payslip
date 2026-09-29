@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\Permission;
 use App\Models\PayrollRun;
 use App\Models\StampedCopyRequest;
 use Inertia\Inertia;
@@ -13,15 +14,15 @@ class DashboardController extends Controller
     {
         $user = auth()->user();
 
-        if (! $user?->isAdmin()) {
+        if (! $user?->hasPermission(Permission::DashboardAdminStats)) {
             return Inertia::render('Dashboard', [
                 'stats' => null,
-                'isAdmin' => false,
+                'showAdminStats' => false,
             ]);
         }
 
         return Inertia::render('Dashboard', [
-            'isAdmin' => true,
+            'showAdminStats' => true,
             'stats' => [
                 'open_drafts' => PayrollRun::where('status', 'draft')->count(),
                 'pending_stamps' => StampedCopyRequest::where('status', 'pending')->count(),

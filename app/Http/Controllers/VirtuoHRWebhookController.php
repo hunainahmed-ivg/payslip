@@ -43,6 +43,11 @@ class VirtuoHRWebhookController extends Controller
             ], $check['status']);
         }
 
+        $companyId = $check['company_id'] ?? null;
+        if ($companyId) {
+            \App\Support\CurrentCompany::bind((int) $companyId);
+        }
+
         // 2) Parse JSON body.
         $payload = $request->json()->all();
 
@@ -100,7 +105,13 @@ class VirtuoHRWebhookController extends Controller
             ->unique()
             ->values();
 
-        $employeeIds = Employee::whereIn('employee_code', $codes)->pluck('id', 'employee_code');
+        $employeeIds = Employee::query()
+            ->whereIn('employee_code', $codes)
+            ->when($companyId, fn ($q) => $q->whereHas(
+                'branch',
+                fn ($b) => $b->where('company_id', $companyId),
+            ))
+            ->pluck('id', 'employee_code');
 
         $rows = [];
         $plan = [];
@@ -259,6 +270,7 @@ class VirtuoHRWebhookController extends Controller
     ): JsonResponse {
         try {
             PayrollSyncEvent::create([
+                'company_id' => $companyId ?? \App\Support\CurrentCompany::id(),
                 'idempotency_key' => $key,
                 'period' => $period,
                 'source' => 'api',

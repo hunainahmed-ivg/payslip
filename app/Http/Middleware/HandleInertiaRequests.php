@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Enums\Permission;
 use App\Models\CompanyProfile;
 use App\Models\StampedCopyRequest;
 use App\Support\CurrentCompany;
@@ -20,7 +21,9 @@ class HandleInertiaRequests extends Middleware
     public function share(Request $request): array
     {
         $user = $request->user();
-        $current = $user?->isAdmin() ? CurrentCompany::profile() : null;
+        $current = ($user && ($user->hasPermission(Permission::CompaniesManage) || $user->effectiveCompanyId()))
+            ? CurrentCompany::profile()
+            : null;
 
         return [
             ...parent::share($request),
@@ -29,8 +32,12 @@ class HandleInertiaRequests extends Middleware
                     'id' => $user->id,
                     'name' => $user->name,
                     'email' => $user->email,
-                    'role' => $user->role ?? 'admin',
+                    'role' => $user->role ?? 'employee',
+                    'role_label' => $user->roleLabel(),
                     'is_admin' => $user->isAdmin(),
+                    'is_platform_operator' => $user->isPlatformOperator(),
+                    'company_id' => $user->company_id,
+                    'permissions' => $user->permissionNames(),
                 ] : null,
             ],
             'companyName' => fn () => $current?->company_name
@@ -39,13 +46,14 @@ class HandleInertiaRequests extends Middleware
                 'id' => $current->id,
                 'company_name' => $current->company_name,
             ] : null,
-            'companies' => fn () => ($user && $user->isAdmin())
+            'companies' => fn () => ($user && ($user->isPlatformOperator() || $user->effectiveCompanyId()))
                 ? CompanyProfile::query()
                     ->where('is_active', true)
+                    ->when(! $user->isPlatformOperator(), fn ($q) => $q->where('id', $user->effectiveCompanyId()))
                     ->orderBy('company_name')
                     ->get(['id', 'company_name'])
                 : [],
-            'pendingStampedCount' => fn () => ($user && $user->isAdmin())
+            'pendingStampedCount' => fn () => ($user && $user->hasPermission(Permission::StampedRequestsManage))
                 ? StampedCopyRequest::where('status', 'pending')->count()
                 : 0,
         ];

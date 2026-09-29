@@ -3,7 +3,7 @@ import { Head, Link } from '@inertiajs/vue3';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 
 defineProps<{
-    isAdmin?: boolean;
+    showAdminStats?: boolean;
     stats?: {
         open_drafts: number;
         pending_stamps: number;
@@ -23,7 +23,7 @@ defineProps<{
         </template>
 
         <div class="grid">
-            <template v-if="isAdmin && stats">
+            <template v-if="showAdminStats && stats">
                 <div class="stats">
                     <div class="card">
                         <div class="label">Open Draft Runs</div>

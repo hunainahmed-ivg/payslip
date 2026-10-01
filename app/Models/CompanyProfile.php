@@ -32,12 +32,25 @@ class CompanyProfile extends Model
 
     public function getHeaderImageUrlAttribute(): ?string
     {
-        return $this->header_image_path ? Storage::url($this->header_image_path) : null;
+        return $this->publicStorageUrl($this->header_image_path);
     }
 
     public function getFooterImageUrlAttribute(): ?string
     {
-        return $this->footer_image_path ? Storage::url($this->footer_image_path) : null;
+        return $this->publicStorageUrl($this->footer_image_path);
+    }
+
+    /**
+     * Scheme-relative storage URL so letterheads work on http and https
+     * regardless of APP_URL (port 1607 is served over plain HTTP).
+     */
+    private function publicStorageUrl(?string $path): ?string
+    {
+        if (! $path || ! Storage::disk('public')->exists($path)) {
+            return null;
+        }
+
+        return '/storage/'.ltrim($path, '/');
     }
 
     public function branches(): HasMany

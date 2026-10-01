@@ -144,8 +144,8 @@ class CompanyController extends Controller
 
     public function switch(CompanyProfile $company): RedirectResponse
     {
-        abort_unless($company->is_active, 403, 'Cannot switch to an inactive company.');
-        abort_unless(auth()->user()?->canAccessCompany($company->id), 403, 'You cannot access that company.');
+        abort_unless($company->is_active, 403, 'This company is inactive.');
+        abort_unless(auth()->user()?->canAccessCompany($company->id), 403, "You don't have access to this company.");
 
         CurrentCompany::set($company->id);
 

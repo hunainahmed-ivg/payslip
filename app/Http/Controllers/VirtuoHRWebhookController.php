@@ -270,7 +270,7 @@ class VirtuoHRWebhookController extends Controller
     ): JsonResponse {
         try {
             PayrollSyncEvent::create([
-                'company_id' => $companyId ?? \App\Support\CurrentCompany::id(),
+                'company_id' => \App\Support\CurrentCompany::id(),
                 'idempotency_key' => $key,
                 'period' => $period,
                 'source' => 'api',

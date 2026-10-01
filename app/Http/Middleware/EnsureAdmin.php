@@ -13,7 +13,7 @@ class EnsureAdmin
         $user = $request->user();
 
         if (! $user || ! $user->isAdmin()) {
-            abort(403, 'This area is restricted to administrators.');
+            abort(403, "You don't have permission to do this.");
         }
 
         return $next($request);

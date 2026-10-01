@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { Head, Link } from '@inertiajs/vue3';
+import { computed } from 'vue';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import PrimaryButton from '@/Components/PrimaryButton.vue';
+import { Permission } from '@/constants/permissions';
+import { usePermissions } from '@/composables/usePermissions';
 
 defineProps<{
     profile: {
@@ -16,6 +19,9 @@ defineProps<{
         accent_color: string;
     };
 }>();
+
+const { can } = usePermissions();
+const canEditVisualIdentity = computed(() => can(Permission.SettingsVisualIdentity));
 </script>
 
 <template>
@@ -27,9 +33,19 @@ defineProps<{
                     <h1>Company Profile</h1>
                     <p>Legal entity details printed on every payslip & stamped copy.</p>
                 </div>
-                <Link :href="route('settings.visual-identity')">
-                    <PrimaryButton>Edit in Visual Identity</PrimaryButton>
-                </Link>
+                <div class="flex flex-col items-end gap-1">
+                    <Link v-if="canEditVisualIdentity" :href="route('settings.visual-identity')">
+                        <PrimaryButton>Edit in Visual Identity</PrimaryButton>
+                    </Link>
+                    <template v-else>
+                        <PrimaryButton disabled title="Ask a Company Admin to grant Visual Identity access.">
+                            Edit in Visual Identity
+                        </PrimaryButton>
+                        <p class="max-w-xs text-right text-xs text-gray-500">
+                            Editing is disabled until a Company Admin grants Visual Identity access.
+                        </p>
+                    </template>
+                </div>
             </div>
         </template>
 

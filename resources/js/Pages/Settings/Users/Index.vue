@@ -28,6 +28,7 @@ interface ManagedUser {
     company_name: string | null;
     uses_custom_permissions: boolean;
     permissions: string[];
+    can_manage: boolean;
 }
 
 interface CompanyOption {
@@ -42,6 +43,7 @@ const props = defineProps<{
     roles: Array<{ value: string; label: string }>;
     canAssignCompany: boolean;
     defaultCompanyId: number | null;
+    actorRole?: string | null;
     success?: string;
     error?: string;
 }>();
@@ -49,12 +51,14 @@ const props = defineProps<{
 const showModal = ref(false);
 const editing = ref<ManagedUser | null>(null);
 
+const defaultRole = computed(() => props.roles[0]?.value ?? 'employee');
+
 const form = useForm({
     name: '',
     email: '',
     password: '',
     password_confirmation: '',
-    role: 'admin',
+    role: defaultRole.value,
     company_id: null as number | null,
     use_custom_permissions: false,
     permissions: [] as string[],
@@ -63,12 +67,38 @@ const form = useForm({
 const deleteForm = useForm({});
 
 const catalogByGroup = computed(() => {
+    const adminOnly = new Set([
+        'users.manage',
+        'employees.manage',
+        'companies.manage',
+        'dashboard.admin-stats',
+    ]);
     const map = new Map<string, CatalogItem[]>();
     for (const item of props.permissionCatalog) {
+        if (form.role === 'employee' && adminOnly.has(item.value)) {
+            continue;
+        }
         if (!map.has(item.group)) map.set(item.group, []);
         map.get(item.group)!.push(item);
     }
     return [...map.entries()];
+});
+
+const companyRequired = computed(
+    () => form.role === 'company_admin' || form.role === 'employee',
+);
+
+const companyHint = computed(() => {
+    if (form.role === 'super_admin') {
+        return 'Super Admins manage the whole platform and are not tied to one company.';
+    }
+    if (form.role === 'company_admin') {
+        return 'Choose the company this admin will manage.';
+    }
+    if (form.role === 'employee') {
+        return 'Choose the company this employee belongs to.';
+    }
+    return '';
 });
 
 const applyRoleDefaults = () => {
@@ -76,26 +106,37 @@ const applyRoleDefaults = () => {
     form.permissions = props.permissionCatalog
         .map((p) => p.value)
         .filter((value) => {
-            if (form.role !== 'admin') {
+            if (form.role === 'employee') {
                 return value === 'dashboard.view' || value === 'portal.payslips';
             }
-            if (form.company_id) {
+            if (form.role === 'company_admin') {
                 return value !== 'companies.manage';
             }
             return true;
         });
 };
 
+const employeePermissionHint = computed(
+    () => form.role === 'employee' && form.use_custom_permissions,
+);
+
 watch(
     () => [form.role, form.company_id, form.use_custom_permissions],
-    () => applyRoleDefaults(),
+    () => {
+        if (form.role === 'super_admin') {
+            form.company_id = null;
+        }
+        applyRoleDefaults();
+    },
 );
 
 const openCreate = () => {
     editing.value = null;
     form.reset();
-    form.role = 'admin';
-    form.company_id = props.canAssignCompany ? props.defaultCompanyId : props.companies[0]?.id ?? null;
+    form.role = defaultRole.value;
+    form.company_id = props.canAssignCompany
+        ? props.defaultCompanyId
+        : props.companies[0]?.id ?? props.defaultCompanyId;
     form.use_custom_permissions = false;
     applyRoleDefaults();
     showModal.value = true;
@@ -141,6 +182,11 @@ const destroyUser = (user: ManagedUser) => {
     if (!confirm(`Remove ${user.name}?`)) return;
     deleteForm.delete(route('settings.users.destroy', user.id), { preserveScroll: true });
 };
+
+const companyDisplay = (user: ManagedUser) => {
+    if (user.role === 'super_admin') return 'All companies';
+    return user.company_name ?? '—';
+};
 </script>
 
 <template>
@@ -151,7 +197,13 @@ const destroyUser = (user: ManagedUser) => {
             <div class="flex flex-wrap items-end justify-between gap-4">
                 <div>
                     <h1>Users & Access</h1>
-                    <p>Create accounts, assign roles, and pick page permissions per user.</p>
+                    <p>
+                        {{
+                            canAssignCompany
+                                ? 'Create Company Admins and employees, and choose which company they belong to.'
+                                : 'Add employees for your company.'
+                        }}
+                    </p>
                 </div>
                 <PrimaryButton type="button" @click="openCreate">Add user</PrimaryButton>
             </div>
@@ -181,14 +233,22 @@ const destroyUser = (user: ManagedUser) => {
                         <td class="px-4 py-3 font-medium text-gray-900">{{ user.name }}</td>
                         <td class="px-4 py-3 text-gray-600">{{ user.email }}</td>
                         <td class="px-4 py-3">{{ user.role_label }}</td>
-                        <td class="px-4 py-3 text-gray-600">{{ user.company_name ?? 'Platform (all companies)' }}</td>
+                        <td class="px-4 py-3 text-gray-600">{{ companyDisplay(user) }}</td>
                         <td class="px-4 py-3 text-gray-600">
                             {{ user.uses_custom_permissions ? 'Custom' : 'Role default' }}
                             · {{ user.permissions.length }} pages
                         </td>
                         <td class="px-4 py-3 text-right">
-                            <SecondaryButton type="button" class="mr-2" @click="openEdit(user)">Edit</SecondaryButton>
-                            <DangerButton type="button" @click="destroyUser(user)">Delete</DangerButton>
+                            <template v-if="user.can_manage">
+                                <SecondaryButton type="button" class="mr-2" @click="openEdit(user)">Edit access</SecondaryButton>
+                                <DangerButton type="button" @click="destroyUser(user)">Delete</DangerButton>
+                            </template>
+                            <span v-else class="text-xs text-gray-400">View only</span>
+                        </td>
+                    </tr>
+                    <tr v-if="!users.length">
+                        <td colspan="6" class="px-4 py-10 text-center text-sm text-gray-500">
+                            No users yet. Add someone to get started.
                         </td>
                     </tr>
                 </tbody>
@@ -229,14 +289,30 @@ const destroyUser = (user: ManagedUser) => {
                             <select id="role" v-model="form.role" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                                 <option v-for="r in roles" :key="r.value" :value="r.value">{{ r.label }}</option>
                             </select>
+                            <InputError class="mt-1" :message="form.errors.role" />
                         </div>
-                        <div v-if="canAssignCompany">
-                            <InputLabel for="company_id" value="Company (tenant)" />
-                            <select id="company_id" v-model="form.company_id" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
-                                <option :value="null">Platform operator (all companies)</option>
+                        <div v-if="canAssignCompany && form.role !== 'super_admin'">
+                            <InputLabel for="company_id" :value="form.role === 'company_admin' ? 'Company' : 'Company'" />
+                            <select
+                                id="company_id"
+                                v-model="form.company_id"
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
+                                :required="companyRequired"
+                            >
+                                <option :value="null" disabled>Select a company</option>
                                 <option v-for="c in companies" :key="c.id" :value="c.id">{{ c.company_name }}</option>
                             </select>
-                            <p class="mt-1 text-xs text-gray-500">Leave blank only for a global platform admin.</p>
+                            <p class="mt-1 text-xs text-gray-500">{{ companyHint }}</p>
+                            <InputError class="mt-1" :message="form.errors.company_id" />
+                        </div>
+                        <div v-else-if="canAssignCompany && form.role === 'super_admin'" class="flex items-end">
+                            <p class="text-sm text-gray-500">{{ companyHint }}</p>
+                        </div>
+                        <div v-else class="flex items-end">
+                            <p class="text-sm text-gray-500">
+                                This user will belong to
+                                <span class="font-medium text-gray-800">{{ companies[0]?.company_name ?? 'your company' }}</span>.
+                            </p>
                         </div>
                     </div>
 
@@ -245,10 +321,13 @@ const destroyUser = (user: ManagedUser) => {
                             :checked="form.use_custom_permissions"
                             @update:checked="(v: boolean) => (form.use_custom_permissions = v)"
                         />
-                        <span class="text-sm text-gray-700">Custom page permissions (override role defaults)</span>
+                        <span class="text-sm text-gray-700">Choose specific pages instead of the role default</span>
                     </label>
 
                     <div v-if="form.use_custom_permissions" class="max-h-64 overflow-y-auto rounded-lg border border-gray-200 p-3">
+                        <p v-if="employeePermissionHint" class="mb-3 text-xs text-amber-700">
+                            Defaults are dashboard and payslips only. You may optionally grant pages like Company Profile or Visual Identity — not Users & Access or Employees.
+                        </p>
                         <div v-for="[group, items] in catalogByGroup" :key="group" class="mb-4 last:mb-0">
                             <div class="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">{{ group }}</div>
                             <label
@@ -263,6 +342,7 @@ const destroyUser = (user: ManagedUser) => {
                                 {{ item.label }}
                             </label>
                         </div>
+                        <InputError class="mt-1" :message="form.errors.permissions" />
                     </div>
 
                     <div class="flex justify-end gap-2 pt-2">

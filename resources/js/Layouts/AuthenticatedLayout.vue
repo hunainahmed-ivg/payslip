@@ -9,6 +9,8 @@ const user = computed(() => page.props.auth.user);
 const { can, roleLabel } = usePermissions();
 const companyName = computed(() => (page.props.companyName as string) || 'Payslip Engine');
 
+const isAdmin = computed(() => Boolean(user.value?.is_admin));
+
 const workspaceLinks = computed(() =>
     [
         {
@@ -24,10 +26,20 @@ const workspaceLinks = computed(() =>
             permission: Permission.PortalPayslips,
         },
         {
+            name: 'My Profile',
+            href: user.value?.employee_id
+                ? route('employees.show', user.value.employee_id)
+                : null,
+            routeName: 'employees.show',
+            // Visible to portal users with a linked employee record; admins use Employees instead.
+            showWhen: Boolean(user.value?.employee_id) && !isAdmin.value,
+        },
+        {
             name: 'Employees',
             href: route('employees.index'),
             routeName: 'employees.*',
             permission: Permission.EmployeesManage,
+            requireAdmin: true,
         },
         {
             name: 'Payroll Import',
@@ -60,7 +72,17 @@ const workspaceLinks = computed(() =>
             permission: Permission.StampedRequestsManage,
             showPending: true,
         },
-    ].filter((link) => can(link.permission)),
+    ].filter((link) => {
+        if ('showWhen' in link) {
+            return Boolean(link.showWhen) && Boolean(link.href);
+        }
+
+        if (link.requireAdmin && !isAdmin.value) {
+            return false;
+        }
+
+        return can(link.permission!);
+    }),
 );
 
 const configurationLinks = computed(() =>
@@ -74,8 +96,20 @@ const configurationLinks = computed(() =>
         { name: 'Integrations', href: route('settings.integrations'), routeName: 'settings.integrations', permission: Permission.SettingsIntegrations },
         { name: 'API Guidelines', href: route('settings.api-guidelines'), routeName: 'settings.api-guidelines', permission: Permission.SettingsApiGuidelines },
         { name: 'Security & Audit', href: route('settings.security-audit'), routeName: 'settings.security-audit', permission: Permission.SettingsSecurityAudit },
-        { name: 'Users & Access', href: route('settings.users.index'), routeName: 'settings.users.*', permission: Permission.UsersManage },
-    ].filter((link) => can(link.permission)),
+        {
+            name: 'Users & Access',
+            href: route('settings.users.index'),
+            routeName: 'settings.users.*',
+            permission: Permission.UsersManage,
+            requireAdmin: true,
+        },
+    ].filter((link) => {
+        if (link.requireAdmin && !isAdmin.value) {
+            return false;
+        }
+
+        return can(link.permission);
+    }),
 );
 
 const companies = computed(() => (page.props.companies as Array<{ id: number; company_name: string }>) || []);
@@ -97,7 +131,7 @@ const switchCompany = (event: Event) => {
                     <div class="brand-name">{{ companyName }}</div>
                     <div class="brand-sub">Payslip Engine</div>
                     <select
-                        v-if="user?.is_platform_operator && companies.length > 1"
+                        v-if="user?.is_super_admin && companies.length > 1"
                         class="company-switcher"
                         :value="currentCompany?.id"
                         @change="switchCompany"
@@ -113,7 +147,7 @@ const switchCompany = (event: Event) => {
                     <Link
                         v-for="link in workspaceLinks"
                         :key="link.name"
-                        :href="link.href"
+                        :href="link.href as string"
                         class="nav-link"
                         :class="{ active: link.routeName ? route().current(link.routeName) : false }"
                     >

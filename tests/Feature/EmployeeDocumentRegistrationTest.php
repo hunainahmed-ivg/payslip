@@ -50,7 +50,6 @@ class EmployeeDocumentRegistrationTest extends TestCase
         ]);
 
         $response = $this->actingAs($this->admin)->post(route('employees.store'), [
-            'employee_code' => 'EMP-1001',
             'full_name' => 'Test User',
             'email' => 'test@example.com',
             'department' => 'IT',
@@ -63,7 +62,7 @@ class EmployeeDocumentRegistrationTest extends TestCase
         ]);
 
         $response->assertSessionHasErrors();
-        $this->assertDatabaseMissing('employees', ['employee_code' => 'EMP-1001']);
+        $this->assertDatabaseMissing('employees', ['email' => 'test@example.com']);
     }
 
     public function test_employee_create_stores_documents_profile_picture_and_initial_ledger(): void
@@ -79,7 +78,6 @@ class EmployeeDocumentRegistrationTest extends TestCase
         ]);
 
         $response = $this->actingAs($this->admin)->post(route('employees.store'), [
-            'employee_code' => 'EMP-1002',
             'full_name' => 'Jane Doe',
             'email' => 'jane@example.com',
             'department' => 'HR',
@@ -100,8 +98,9 @@ class EmployeeDocumentRegistrationTest extends TestCase
 
         $response->assertRedirect(route('employees.index'));
 
-        $employee = Employee::where('employee_code', 'EMP-1002')->first();
+        $employee = Employee::where('email', 'jane@example.com')->first();
         $this->assertNotNull($employee);
+        $this->assertMatchesRegularExpression('/^EMP-\d{4,}$/', $employee->employee_code);
         $this->assertNotNull($employee->profile_picture_path);
         $this->assertTrue(Storage::disk('private')->exists($employee->profile_picture_path));
         $this->assertSame(2, $employee->documents()->count());
@@ -112,8 +111,32 @@ class EmployeeDocumentRegistrationTest extends TestCase
         ]);
         $this->assertDatabaseHas('audit_logs', [
             'action' => 'employee.created',
-            'subject' => 'EMP-1002',
+            'subject' => $employee->employee_code,
         ]);
+    }
+
+    public function test_employee_code_is_auto_generated_and_sequential(): void
+    {
+        Employee::factory()->create([
+            'branch_id' => $this->branch->id,
+            'employee_code' => 'EMP-0042',
+        ]);
+
+        $this->actingAs($this->admin)->post(route('employees.store'), [
+            'full_name' => 'Auto Code User',
+            'email' => 'auto.code@example.com',
+            'department' => 'IT',
+            'designation' => 'Dev',
+            'branch_id' => $this->branch->id,
+            'currency_code' => 'PKR',
+            'base_salary' => 45000,
+            'joined_on' => now()->toDateString(),
+            'is_active' => true,
+        ])->assertRedirect(route('employees.index'));
+
+        $employee = Employee::where('email', 'auto.code@example.com')->first();
+        $this->assertNotNull($employee);
+        $this->assertSame('EMP-0043', $employee->employee_code);
     }
 
     public function test_employee_update_cannot_change_base_salary(): void
@@ -132,7 +155,7 @@ class EmployeeDocumentRegistrationTest extends TestCase
         ]);
 
         $this->actingAs($this->admin)->put(route('employees.update', $employee), [
-            'employee_code' => 'EMP-2000',
+            'employee_code' => 'EMP-HACKED',
             'full_name' => 'Updated Name',
             'email' => $employee->email,
             'department' => 'Ops',
@@ -144,7 +167,9 @@ class EmployeeDocumentRegistrationTest extends TestCase
             'is_active' => true,
         ])->assertRedirect();
 
-        $this->assertSame('50000.00', $employee->fresh()->base_salary);
-        $this->assertSame('Updated Name', $employee->fresh()->full_name);
+        $fresh = $employee->fresh();
+        $this->assertSame('50000.00', $fresh->base_salary);
+        $this->assertSame('Updated Name', $fresh->full_name);
+        $this->assertSame('EMP-2000', $fresh->employee_code);
     }
 }

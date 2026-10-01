@@ -21,7 +21,7 @@ class TenantOperatorSeeder extends Seeder
             [
                 'name' => 'Platform Admin',
                 'password' => Hash::make('password'),
-                'role' => 'admin',
+                'role' => 'super_admin',
                 'company_id' => null,
                 'assigned_permissions' => null,
             ],
@@ -36,7 +36,7 @@ class TenantOperatorSeeder extends Seeder
                 [
                     'name' => $company->company_name.' Admin',
                     'password' => Hash::make('password'),
-                    'role' => 'admin',
+                    'role' => 'company_admin',
                     'company_id' => $company->id,
                     'assigned_permissions' => null,
                 ],

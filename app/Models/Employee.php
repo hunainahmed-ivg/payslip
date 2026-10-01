@@ -59,4 +59,30 @@ class Employee extends Model
     {
         return $this->hasMany(SalaryLedgerEntry::class);
     }
+
+    /**
+     * Next system employee code in the EMP-0001 sequence.
+     * Call inside a DB transaction so concurrent creates stay unique.
+     */
+    public static function generateNextCode(): string
+    {
+        $codes = static::query()
+            ->where('employee_code', 'like', 'EMP-%')
+            ->lockForUpdate()
+            ->pluck('employee_code');
+
+        $max = 0;
+        foreach ($codes as $code) {
+            if (preg_match('/^EMP-(\d+)$/i', (string) $code, $matches)) {
+                $max = max($max, (int) $matches[1]);
+            }
+        }
+
+        do {
+            $max++;
+            $next = 'EMP-'.str_pad((string) $max, 4, '0', STR_PAD_LEFT);
+        } while (static::query()->where('employee_code', $next)->exists());
+
+        return $next;
+    }
 }

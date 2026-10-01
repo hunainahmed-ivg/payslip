@@ -6,8 +6,11 @@ export interface User {
     role?: string;
     role_label?: string;
     is_admin?: boolean;
+    is_super_admin?: boolean;
+    is_company_admin?: boolean;
     is_platform_operator?: boolean;
     company_id?: number | null;
+    employee_id?: number | null;
     permissions?: string[];
 }
 

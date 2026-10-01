@@ -25,6 +25,6 @@ class EnsurePermission
             }
         }
 
-        abort(403, 'You do not have permission to access this page.');
+        abort(403, "You don't have permission to access this page.");
     }
 }

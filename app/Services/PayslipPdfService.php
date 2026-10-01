@@ -62,16 +62,16 @@ class PayslipPdfService
         $headerPath = null;
         $footerPath = null;
 
-        if ($profile?->header_image_path) {
+        if ($profile?->header_image_path && Storage::disk('public')->exists($profile->header_image_path)) {
             $headerPath = $forBrowser
-                ? Storage::disk('public')->url($profile->header_image_path)
-                : Storage::disk('public')->path($profile->header_image_path);
+                ? $this->publicStorageUrl($profile->header_image_path)
+                : $this->embeddedImageSrc($profile->header_image_path);
         }
 
-        if ($profile?->footer_image_path) {
+        if ($profile?->footer_image_path && Storage::disk('public')->exists($profile->footer_image_path)) {
             $footerPath = $forBrowser
-                ? Storage::disk('public')->url($profile->footer_image_path)
-                : Storage::disk('public')->path($profile->footer_image_path);
+                ? $this->publicStorageUrl($profile->footer_image_path)
+                : $this->embeddedImageSrc($profile->footer_image_path);
         }
 
         return view($view, [
@@ -111,6 +111,28 @@ class PayslipPdfService
                 : 'payslips.modern',
             default => 'payslips.modern',
         };
+    }
+
+    /**
+     * Browser-safe relative URL so letterheads load on http and https
+     * even when APP_URL scheme/host does not match the request.
+     */
+    private function publicStorageUrl(string $path): string
+    {
+        return '/storage/'.ltrim($path, '/');
+    }
+
+    /**
+     * Embed public-disk images as data URIs so DomPDF reliably includes them
+     * without depending on chroot, remote fetching, or file:// quirks.
+     */
+    private function embeddedImageSrc(string $path): string
+    {
+        $absolute = Storage::disk('public')->path($path);
+        $mime = mime_content_type($absolute) ?: 'image/png';
+        $data = base64_encode((string) file_get_contents($absolute));
+
+        return 'data:'.$mime.';base64,'.$data;
     }
 
     /**

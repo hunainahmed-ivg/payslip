@@ -14,6 +14,10 @@ return new class extends Migration
 
         Schema::create('payroll_sync_events', function (Blueprint $table) {
             $table->id();
+            $table->foreignId('company_id')
+                ->nullable()
+                ->constrained('company_profiles')
+                ->nullOnDelete();
             $table->string('idempotency_key')->unique();
             $table->string('period', 7)->nullable()->index();
             $table->string('source')->default('api');
@@ -30,6 +34,8 @@ return new class extends Migration
             $table->string('payload_hash', 64)->nullable();
             $table->text('error_message')->nullable();
             $table->timestamps();
+
+            $table->index(['company_id', 'created_at']);
         });
     }
 

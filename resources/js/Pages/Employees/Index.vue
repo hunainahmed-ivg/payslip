@@ -322,7 +322,20 @@ const showBulkImport = ref(false);
                         <div class="grid grid-cols-2 gap-4">
                             <div>
                                 <InputLabel for="employee_code" value="Employee Code" />
-                                <TextInput id="employee_code" v-model="form.employee_code" class="mt-1 block w-full" required placeholder="e.g. EMP-8042" />
+                                <TextInput
+                                    id="employee_code"
+                                    v-model="form.employee_code"
+                                    class="mt-1 block w-full"
+                                    readonly
+                                    :placeholder="editing ? undefined : 'Auto-generated on save'"
+                                />
+                                <p class="mt-1 text-xs text-gray-500">
+                                    {{
+                                        editing
+                                            ? 'Assigned by the system and cannot be changed.'
+                                            : 'A unique code (e.g. EMP-0001) will be created automatically.'
+                                    }}
+                                </p>
                                 <InputError :message="form.errors.employee_code" class="mt-2" />
                             </div>
                             <div>

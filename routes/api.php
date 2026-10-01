@@ -39,7 +39,7 @@ Route::middleware(['auth:sanctum', 'api.company'])->prefix('v1')->group(function
             ->name('api.v1.registration-document-types.destroy');
     });
 
-    Route::middleware('permission:'.Permission::EmployeesManage->value)->group(function () {
+    Route::middleware(['admin', 'permission:'.Permission::EmployeesManage->value])->group(function () {
         Route::get('/employees/{employee}/documents', [ApiEmployeeDocumentController::class, 'index'])
             ->name('api.v1.employees.documents.index');
         Route::post('/employees/{employee}/documents', [ApiEmployeeDocumentController::class, 'store'])

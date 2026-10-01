@@ -8,6 +8,22 @@ use App\Models\User;
 
 class RolePermissions
 {
+    /**
+     * Permissions reserved for Company Admin / Super Admin.
+     * Employees must never receive these — even via custom permission overrides.
+     *
+     * @return list<string>
+     */
+    public static function adminOnlyPermissions(): array
+    {
+        return [
+            Permission::UsersManage->value,
+            Permission::EmployeesManage->value,
+            Permission::CompaniesManage->value,
+            Permission::DashboardAdminStats->value,
+        ];
+    }
+
     /** @return list<string> */
     public static function forEmployee(): array
     {
@@ -17,15 +33,66 @@ class RolePermissions
         ];
     }
 
-    /** @return list<string> */
-    public static function forAdmin(User $user): array
+    /**
+     * Pages a Company Admin may optionally grant to an employee (custom access).
+     * Defaults stay portal-only; admin-only pages are never included.
+     *
+     * @return list<string>
+     */
+    public static function assignableToEmployee(): array
     {
-        $permissions = Permission::values();
+        $blocked = self::adminOnlyPermissions();
 
-        if ($user->company_id !== null) {
+        return array_values(array_filter(
+            Permission::values(),
+            fn (string $permission) => ! in_array($permission, $blocked, true),
+        ));
+    }
+
+    /** @return list<string> */
+    public static function forCompanyAdmin(): array
+    {
+        return array_values(array_filter(
+            Permission::values(),
+            fn (string $permission) => $permission !== Permission::CompaniesManage->value,
+        ));
+    }
+
+    /** @return list<string> */
+    public static function forSuperAdmin(): array
+    {
+        return Permission::values();
+    }
+
+    /**
+     * Strip privileges that the given role is never allowed to hold.
+     *
+     * @param  list<string>  $permissions
+     * @return list<string>
+     */
+    public static function sanitizeForRole(string $role, array $permissions, ?int $companyId = null): array
+    {
+        $permissions = array_values(array_unique(array_filter($permissions)));
+
+        $isSuperAdmin = UserRole::isSuperAdminRole($role)
+            || ($role === UserRole::LEGACY_ADMIN && $companyId === null);
+
+        if ($isSuperAdmin) {
+            return $permissions;
+        }
+
+        // Platform-only: never on company-scoped accounts.
+        $permissions = array_values(array_filter(
+            $permissions,
+            fn (string $permission) => $permission !== Permission::CompaniesManage->value,
+        ));
+
+        $isAdmin = UserRole::isAdminRole($role);
+        if (! $isAdmin) {
+            $blocked = self::adminOnlyPermissions();
             $permissions = array_values(array_filter(
                 $permissions,
-                fn (string $permission) => $permission !== Permission::CompaniesManage->value,
+                fn (string $permission) => ! in_array($permission, $blocked, true),
             ));
         }
 
@@ -36,45 +103,73 @@ class RolePermissions
     public static function forUser(User $user): array
     {
         if (is_array($user->assigned_permissions)) {
-            return array_values(array_unique(array_filter($user->assigned_permissions)));
+            return self::sanitizeForRole(
+                (string) $user->role,
+                $user->assigned_permissions,
+                $user->company_id,
+            );
         }
 
-        if ($user->isAdmin()) {
-            return self::forAdmin($user);
-        }
-
-        if ($user->isEmployee()) {
-            return self::forEmployee();
-        }
-
-        return self::forEmployee();
+        return self::defaultsForRole(
+            (string) $user->role,
+            $user->company_id,
+        );
     }
 
     public static function roleLabel(User $user): string
     {
-        if ($user->isAdmin()) {
-            return UserRole::Admin->label();
+        if ($user->isSuperAdmin()) {
+            return UserRole::SuperAdmin->label();
+        }
+
+        if ($user->isCompanyAdmin()) {
+            return UserRole::CompanyAdmin->label();
         }
 
         if ($user->isEmployee()) {
             return UserRole::Employee->label();
         }
 
-        return ucfirst((string) $user->role);
+        $resolved = UserRole::tryFromFlexible($user->role);
+
+        return $resolved?->label() ?? ucfirst((string) $user->role);
     }
 
     /** @return list<string> */
     public static function defaultsForRole(string $role, ?int $companyId = null): array
     {
-        $stub = new User([
-            'role' => $role,
-            'company_id' => $companyId,
-        ]);
+        if (UserRole::isSuperAdminRole($role) || ($role === UserRole::LEGACY_ADMIN && $companyId === null)) {
+            return self::forSuperAdmin();
+        }
 
-        if (in_array(strtolower($role), ['admin', 'hr', 'super-admin', 'administrator'], true)) {
-            return self::forAdmin($stub);
+        if (UserRole::isAdminRole($role)) {
+            return self::forCompanyAdmin();
         }
 
         return self::forEmployee();
+    }
+
+    /**
+     * Roles the actor is allowed to assign in Users & Access.
+     *
+     * @return list<array{value: string, label: string}>
+     */
+    public static function assignableRolesFor(User $actor): array
+    {
+        if ($actor->isSuperAdmin()) {
+            return [
+                ['value' => UserRole::CompanyAdmin->value, 'label' => UserRole::CompanyAdmin->label()],
+                ['value' => UserRole::Employee->value, 'label' => UserRole::Employee->label()],
+                ['value' => UserRole::SuperAdmin->value, 'label' => UserRole::SuperAdmin->label()],
+            ];
+        }
+
+        if ($actor->isCompanyAdmin()) {
+            return [
+                ['value' => UserRole::Employee->value, 'label' => UserRole::Employee->label()],
+            ];
+        }
+
+        return [];
     }
 }

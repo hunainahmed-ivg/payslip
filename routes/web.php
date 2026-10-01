@@ -94,12 +94,16 @@ Route::middleware('auth')->group(function () {
             ->name('settings.integrations.webhook-secret');
     });
 
-    Route::middleware('permission:'.Permission::UsersManage->value)->prefix('settings/users')->name('settings.users.')->group(function () {
-        Route::get('/', [UserManagementController::class, 'index'])->name('index');
-        Route::post('/', [UserManagementController::class, 'store'])->name('store');
-        Route::put('/{user}', [UserManagementController::class, 'update'])->name('update');
-        Route::delete('/{user}', [UserManagementController::class, 'destroy'])->name('destroy');
-    });
+    // Users & Access: Company Admin / Super Admin only (employees are hard-blocked).
+    Route::middleware(['admin', 'permission:'.Permission::UsersManage->value])
+        ->prefix('settings/users')
+        ->name('settings.users.')
+        ->group(function () {
+            Route::get('/', [UserManagementController::class, 'index'])->name('index');
+            Route::post('/', [UserManagementController::class, 'store'])->name('store');
+            Route::put('/{user}', [UserManagementController::class, 'update'])->name('update');
+            Route::delete('/{user}', [UserManagementController::class, 'destroy'])->name('destroy');
+        });
 
     Route::middleware('permission:'.Permission::SettingsApiGuidelines->value)->group(function () {
         Route::get('/settings/api-guidelines', [ApiGuidelinesController::class, 'index'])
@@ -153,7 +157,13 @@ Route::middleware('auth')->group(function () {
         Route::get('/export/pdf', [SalaryIncrementController::class, 'exportPdf'])->name('export.pdf');
     });
 
-    Route::middleware('permission:'.Permission::EmployeesManage->value)->group(function () {
+    Route::get('/employees/{employee}', [EmployeeController::class, 'show'])->name('employees.show');
+    Route::get('/employees/{employee}/documents/{document}', [EmployeeController::class, 'downloadDocument'])
+        ->name('employees.documents.download');
+
+    // Company employee directory & management: Company Admin / Super Admin only.
+    // Individual self-service profile remains on employees.show above.
+    Route::middleware(['admin', 'permission:'.Permission::EmployeesManage->value])->group(function () {
         Route::get('/employees', [EmployeeController::class, 'index'])->name('employees.index');
         Route::post('/employees', [EmployeeController::class, 'store'])->name('employees.store');
         Route::get('/employees/bulk-import/template', [EmployeeBulkImportController::class, 'template'])
@@ -162,11 +172,10 @@ Route::middleware('auth')->group(function () {
             ->name('employees.bulk-import.dry-run');
         Route::post('/employees/bulk-import/commit', [EmployeeBulkImportController::class, 'commit'])
             ->name('employees.bulk-import.commit');
-        Route::get('/employees/{employee}', [EmployeeController::class, 'show'])->name('employees.show');
+        Route::get('/employees/{employee}/salary-structure', [EmployeeController::class, 'salaryStructure'])
+            ->name('employees.salary-structure');
         Route::put('/employees/{employee}', [EmployeeController::class, 'update'])->name('employees.update');
         Route::delete('/employees/{employee}', [EmployeeController::class, 'destroy'])->name('employees.destroy');
-        Route::get('/employees/{employee}/documents/{document}', [EmployeeController::class, 'downloadDocument'])
-            ->name('employees.documents.download');
 
         Route::post('/employees/{employee}/salary-components', [EmployeeSalaryComponentController::class, 'store'])->name('employees.salary-components.store');
         Route::put('/employees/{employee}/salary-components/{override}', [EmployeeSalaryComponentController::class, 'update'])->name('employees.salary-components.update');
